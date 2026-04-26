@@ -31,7 +31,7 @@ public class AiImportService
         };
     }
 
-    public string[] AvailableModels { get; } = ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-5.2"];
+    public string[] AvailableModels { get; } = ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-5.2", "gpt-5.4-nano", "gpt-5.4-mini"];
 
     private static readonly JsonSerializerOptions s_requestJsonOptions = new()
     {

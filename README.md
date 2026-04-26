@@ -28,7 +28,7 @@ A fast, keyboard-friendly REST API client for Windows. Postman-lite, built nativ
 ### Import / export
 - **Import / export request as JSON** via standard file dialogs — share requests via git, Slack, or wherever.
 - **Copy as cURL** — turns the current request (verb, URL, headers, auth, body) into a ready-to-paste `curl` command.
-- **AI Import** — paste a curl command, OpenAPI/Swagger snippet, code sample, or plain-English description, and let an LLM extract a structured request (method, URL, headers, query params, body, auth). Preview the parsed JSON before applying. Uses any OpenAI-compatible Chat Completions endpoint, with configurable model (defaults include `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-5.2`).
+- **AI Import** — paste a curl command, OpenAPI/Swagger snippet, code sample, or plain-English description, and let an LLM extract a structured request (method, URL, headers, query params, body, auth). Preview the parsed JSON before applying. Uses any OpenAI-compatible Chat Completions endpoint, with configurable model (defaults include `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-5.2`, `gpt-5.4-nano`, `gpt-5.4-mini`).
 
 ### UI / UX
 - **Custom dark chrome** with borderless window, draggable title bar, and proper Windows snap/maximize behavior (handles `WM_GETMINMAXINFO` so maximize respects the work area).
