@@ -1,0 +1,249 @@
+<UserControl x:Class="PayloadPanda.Views.AiImportPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:PayloadPanda.ViewModels"
+             xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance Type=vm:MainViewModel}">
+
+    <!-- Semi-transparent backdrop -->
+    <Border Background="#CC0D1117" MouseDown="Backdrop_MouseDown">
+        <Grid HorizontalAlignment="Center" VerticalAlignment="Center"
+              MaxWidth="800" MinWidth="600" Margin="24">
+
+            <!-- Card container -->
+            <Border Background="{DynamicResource BgSurface}"
+                    CornerRadius="8"
+                    BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="1">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" BlurRadius="32" ShadowDepth="0" Opacity="0.6"/>
+                </Border.Effect>
+
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- ==================== HEADER ==================== -->
+                    <Border Grid.Row="0" Padding="20,16"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="&#x2728;" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="AI Import" FontSize="16" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                                <Border Background="{DynamicResource BgPanel}" CornerRadius="10"
+                                        Padding="8,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="Paste any API request" FontSize="11"
+                                               Foreground="{DynamicResource TextMuted}"/>
+                                </Border>
+                            </StackPanel>
+
+                            <Button Grid.Column="1" Content="&#x2715;" Style="{StaticResource GhostButton}"
+                                    Command="{Binding CloseAiImportCommand}"
+                                    FontSize="14" Padding="6,2" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- ==================== BODY ==================== -->
+                    <Grid Grid.Row="1" Margin="20,16">
+
+                        <!-- INPUT STATE: visible when AiImportResult is null -->
+                        <Grid Visibility="{Binding AiImportResult, Converter={StaticResource NullToVisibility}, ConverterParameter=Invert}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Model selector -->
+                            <Grid Grid.Row="0" Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Model:" FontSize="12"
+                                           Foreground="{DynamicResource TextSecondary}"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <ComboBox Grid.Column="1"
+                                          ItemsSource="{Binding AiImportAvailableModels}"
+                                          SelectedItem="{Binding AiImportSelectedModel}"
+                                          MinWidth="160">
+                                    <ComboBox.Style>
+                                        <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsAiImportProcessing}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ComboBox.Style>
+                                </ComboBox>
+                            </Grid>
+
+                            <!-- Input TextBox -->
+                            <TextBox Grid.Row="1"
+                                     Text="{Binding AiImportInput, UpdateSourceTrigger=PropertyChanged}"
+                                     FontFamily="{DynamicResource CodeFont}"
+                                     FontSize="13"
+                                     AcceptsReturn="True"
+                                     AcceptsTab="True"
+                                     TextWrapping="Wrap"
+                                     VerticalScrollBarVisibility="Auto"
+                                     MinHeight="200"
+                                     IsReadOnly="{Binding IsAiImportProcessing}">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsAiImportProcessing}" Value="True">
+                                                <Setter Property="Opacity" Value="0.5"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
+
+                            <!-- Status area below input -->
+                            <StackPanel Grid.Row="2" Margin="0,8,0,0">
+                                <!-- Processing indicator -->
+                                <StackPanel Orientation="Horizontal"
+                                            Visibility="{Binding IsAiImportProcessing, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="&#x23F3;" FontSize="13" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Parsing with AI..." FontSize="12"
+                                               Foreground="{DynamicResource AccentBlue}" VerticalAlignment="Center"/>
+                                </StackPanel>
+
+                                <!-- Helper text (not processing) -->
+                                <TextBlock FontSize="11" Foreground="{DynamicResource TextMuted}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding IsAiImportProcessing, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                                    Paste a curl command, Swagger snippet, API docs, or describe a request in plain text.
+                                </TextBlock>
+
+                                <!-- Error display -->
+                                <Border Background="#2D1418" CornerRadius="4" Padding="10,8" Margin="0,8,0,0"
+                                        Visibility="{Binding AiImportError, Converter={StaticResource NullToVisibility}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#x274C;" FontSize="12" Margin="0,0,6,0" VerticalAlignment="Top"/>
+                                        <TextBlock Text="{Binding AiImportError}" FontSize="12"
+                                                   Foreground="{DynamicResource AccentRed}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- RESULT STATE: visible when AiImportResult is not null -->
+                        <Grid Visibility="{Binding AiImportResult, Converter={StaticResource NullToVisibility}}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Summary bar -->
+                            <Border Grid.Row="0" Background="{DynamicResource BgPanel}"
+                                    CornerRadius="6" Padding="12,10" Margin="0,0,0,10">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border CornerRadius="4" Padding="8,3" Margin="0,0,10,0"
+                                            Background="{DynamicResource AccentBlue}">
+                                        <TextBlock Text="{Binding AiImportResult.Request.Method}"
+                                                   FontWeight="Bold" FontSize="12" Foreground="White"/>
+                                    </Border>
+                                    <TextBlock Text="{Binding AiImportResult.Request.Url}"
+                                               FontFamily="{DynamicResource CodeFont}" FontSize="13"
+                                               Foreground="{DynamicResource TextPrimary}"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               MaxWidth="550"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Warnings -->
+                            <ItemsControl Grid.Row="1"
+                                          ItemsSource="{Binding AiImportResult.Warnings}"
+                                          Visibility="{Binding AiImportResult.HasWarnings, Converter={StaticResource BoolToVisibility}}"
+                                          Margin="0,0,0,8">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#2D2710" CornerRadius="4" Padding="10,6" Margin="0,0,0,4">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="&#x26A0;" FontSize="12" Margin="0,0,6,0"
+                                                           Foreground="{DynamicResource AccentYellow}" VerticalAlignment="Top"/>
+                                                <TextBlock Text="{Binding}" FontSize="12"
+                                                           Foreground="{DynamicResource AccentYellow}"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- JSON preview -->
+                            <avalonedit:TextEditor Grid.Row="2"
+                                                   x:Name="AiPreviewEditor"
+                                                   FontFamily="{DynamicResource CodeFont}"
+                                                   FontSize="12"
+                                                   Background="{DynamicResource BgInput}"
+                                                   Foreground="{DynamicResource TextPrimary}"
+                                                   ShowLineNumbers="True"
+                                                   IsReadOnly="True"
+                                                   WordWrap="True"
+                                                   BorderBrush="{DynamicResource BorderBrush}"
+                                                   BorderThickness="1"
+                                                   LineNumbersForeground="{DynamicResource TextMuted}"
+                                                   MinHeight="150"/>
+                        </Grid>
+                    </Grid>
+
+                    <!-- ==================== FOOTER ==================== -->
+                    <Border Grid.Row="2" Padding="20,12"
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Left: "Edit & Re-parse" in result state -->
+                            <Button Grid.Column="0" Content="&#x270F; Edit &amp; Re-parse"
+                                    Style="{StaticResource GhostButton}"
+                                    Command="{Binding EditAiImportCommand}"
+                                    Visibility="{Binding AiImportResult, Converter={StaticResource NullToVisibility}}"
+                                    HorizontalAlignment="Left"/>
+
+                            <!-- Right: Cancel -->
+                            <Button Grid.Column="1" Content="Cancel" Style="{StaticResource GhostButton}"
+                                    Command="{Binding CloseAiImportCommand}" Margin="0,0,8,0"/>
+
+                            <!-- Parse button (input state, not processing) -->
+                            <Button Grid.Column="2" Content="&#x2728; Parse with AI"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding RunAiImportCommand}"
+                                    MinWidth="140"
+                                    Visibility="{Binding AiImportResult, Converter={StaticResource NullToVisibility}, ConverterParameter=Invert}"/>
+
+                            <!-- Apply button (result state) -->
+                            <Button Grid.Column="2" Content="Apply to Request Builder"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding ApplyAiImportCommand}"
+                                    MinWidth="200"
+                                    Visibility="{Binding AiImportResult, Converter={StaticResource NullToVisibility}}"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>

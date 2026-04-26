@@ -1,0 +1,147 @@
+<Window x:Class="PayloadPanda.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings"
+        Width="550" Height="620"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="None"
+        Background="{DynamicResource BgDeep}"
+        Foreground="{DynamicResource TextPrimary}">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="36" ResizeBorderThickness="0"
+                      CornerRadius="0" GlassFrameThickness="0"/>
+    </WindowChrome.WindowChrome>
+
+    <Border BorderBrush="{DynamicResource WindowBorderAccent}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Title Bar -->
+            <Border Grid.Row="0" Background="{DynamicResource BgSurface}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                        <TextBlock Text="&#x2699;" FontSize="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Settings" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button Grid.Column="1" Style="{StaticResource WindowChromeButton}"
+                            Click="CloseButton_Click" ToolTip="Close"
+                            Width="36" Height="28">
+                        <Path Data="M 0 0 L 8 8 M 0 8 L 8 0"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1" Width="8" Height="8" Stretch="Uniform"
+                              VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Content -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,16">
+                <StackPanel>
+
+                    <!-- ==================== STORAGE ==================== -->
+                    <TextBlock Text="STORAGE" FontSize="11" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
+
+                    <Label Content="History file location"/>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="HistoryPathBox" Grid.Column="0"
+                                 FontFamily="{DynamicResource CodeFont}" FontSize="12"/>
+                        <Button Grid.Column="1" Content="Browse..." Style="{StaticResource GhostButton}"
+                                Click="BrowseHistoryPath_Click" Margin="6,0,0,0"
+                                WindowChrome.IsHitTestVisibleInChrome="True"/>
+                    </Grid>
+                    <TextBlock Text="Leave empty for default (%AppData%)" FontSize="10"
+                               Foreground="{DynamicResource TextMuted}" Margin="0,0,0,12"/>
+
+                    <Label Content="Max history items (0 = unlimited)"/>
+                    <TextBox x:Name="MaxHistoryBox" Width="100" HorizontalAlignment="Left" Margin="0,0,0,16"/>
+
+                    <Separator Margin="0,0,0,12"/>
+
+                    <!-- ==================== HTTP DEFAULTS ==================== -->
+                    <TextBlock Text="HTTP DEFAULTS" FontSize="11" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
+
+                    <Label Content="Default timeout (seconds)"/>
+                    <TextBox x:Name="TimeoutBox" Width="100" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+
+                    <CheckBox x:Name="FollowRedirectsBox" Content="Follow redirects" Margin="0,0,0,6"/>
+                    <CheckBox x:Name="SslVerificationBox" Content="SSL certificate verification" Margin="0,0,0,4"/>
+                    <TextBlock Text="Disable for self-signed certificates" FontSize="10"
+                               Foreground="{DynamicResource TextMuted}" Margin="22,0,0,16"/>
+
+                    <Separator Margin="0,0,0,12"/>
+
+                    <!-- ==================== EDITOR ==================== -->
+                    <TextBlock Text="EDITOR" FontSize="11" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
+
+                    <Label Content="Font size"/>
+                    <TextBox x:Name="FontSizeBox" Width="100" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+
+                    <CheckBox x:Name="WordWrapBox" Content="Word wrap" Margin="0,0,0,16"/>
+
+                    <Separator Margin="0,0,0,12"/>
+
+                    <!-- ==================== AI IMPORT ==================== -->
+                    <TextBlock Text="AI IMPORT" FontSize="11" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
+
+                    <Label Content="OpenAI API Key"/>
+                    <PasswordBox x:Name="ApiKeyBox" Margin="0,0,0,4"/>
+                    <TextBlock Text="Falls back to OPENAI_API_KEY env var" FontSize="10"
+                               Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
+
+                    <Label Content="API Endpoint"/>
+                    <TextBox x:Name="AiEndpointBox" FontFamily="{DynamicResource CodeFont}" FontSize="12"
+                             Margin="0,0,0,8"/>
+
+                    <Label Content="Default model"/>
+                    <ComboBox x:Name="AiModelBox" Width="180" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+
+                    <Label Content="AI timeout (seconds)"/>
+                    <TextBox x:Name="AiTimeoutBox" Width="100" HorizontalAlignment="Left" Margin="0,0,0,8"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Footer -->
+            <Border Grid.Row="2" Background="{DynamicResource BgSurface}"
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                    Padding="16,12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Content="Reset Defaults" Style="{StaticResource GhostButton}"
+                            Click="ResetDefaults_Click"
+                            WindowChrome.IsHitTestVisibleInChrome="True"/>
+                    <Button Grid.Column="2" Content="Cancel" Style="{StaticResource GhostButton}"
+                            Click="Cancel_Click" Margin="0,0,8,0"
+                            WindowChrome.IsHitTestVisibleInChrome="True"/>
+                    <Button Grid.Column="3" Content="Save" Style="{StaticResource PrimaryButton}"
+                            Click="Save_Click" MinWidth="80"
+                            WindowChrome.IsHitTestVisibleInChrome="True"/>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

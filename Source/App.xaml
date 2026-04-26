@@ -1,0 +1,21 @@
+<Application x:Class="PayloadPanda.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="clr-namespace:PayloadPanda.Converters"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DarkTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Converters -->
+            <converters:StatusCodeToBrushConverter x:Key="StatusCodeToBrush"/>
+            <converters:MethodToBrushConverter x:Key="MethodToBrush"/>
+            <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+            <converters:FileSizeConverter x:Key="FileSizeConverter"/>
+            <converters:AuthModeToVisibilityConverter x:Key="AuthModeToVisibility"/>
+            <converters:NullToVisibilityConverter x:Key="NullToVisibility"/>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
