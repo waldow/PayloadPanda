@@ -1,6 +1,20 @@
-# PayloadPanda
+<div align="center">
+  <img src="Source/images/app-preview.png" alt="PayloadPanda panda mascot icon" width="168" />
+  <h1>PayloadPanda</h1>
+  <p><strong>A fast, keyboard-friendly REST API client for Windows.</strong></p>
+  <p>Feed it URLs, headers, bodies, and cURL. PayloadPanda pads through the request jungle, sends the payload, and brings the response back neatly groomed.</p>
+</div>
 
-A fast, keyboard-friendly REST API client for Windows. Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cloud sync. Local JSON files all the way down.
+Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cloud sync. Local JSON files all the way down.
+
+## Panda magic
+
+<img src="Source/images/svgforicons.svg" alt="PayloadPanda panda icon" width="96" align="right" />
+
+- **Payloads with paws** — compose requests quickly without waking up a heavyweight client.
+- **Bamboo-simple storage** — saved requests, history, autosave, and settings are plain local JSON.
+- **Curl tamer** — import, export, copy, and reshape requests without losing the little details.
+- **AI import helper** — paste messy snippets and let the panda sort the payload from the leaves.
 
 ## Features
 

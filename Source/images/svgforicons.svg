@@ -1,75 +1,83 @@
-<svg id="the-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="256" height="256">
-                        <defs>
-                            <!-- Background Gradients -->
-                            <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#1A0B2E"></stop>
-                                <stop offset="50%" stop-color="#0B0514"></stop>
-                                <stop offset="100%" stop-color="#05020A"></stop>
-                            </linearGradient>
-                            <linearGradient id="glass-edge" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="rgba(255, 255, 255, 0.4)"></stop>
-                                <stop offset="40%" stop-color="rgba(255, 255, 255, 0.05)"></stop>
-                                <stop offset="100%" stop-color="rgba(255, 255, 255, 0.0)"></stop>
-                            </linearGradient>
-                            <radialGradient id="vignette" cx="50%" cy="50%" r="50%">
-                                <stop offset="70%" stop-color="rgba(0,0,0,0)"></stop>
-                                <stop offset="100%" stop-color="rgba(0,0,0,0.6)"></stop>
-                            </radialGradient>
+<svg id="payload-panda-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="256" height="256" role="img" aria-label="PayloadPanda app icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101925"/>
+      <stop offset="0.55" stop-color="#07101a"/>
+      <stop offset="1" stop-color="#05080e"/>
+    </linearGradient>
+    <linearGradient id="cyanBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#69f5ff"/>
+      <stop offset="0.55" stop-color="#1595ff"/>
+      <stop offset="1" stop-color="#7d68ff"/>
+    </linearGradient>
+    <linearGradient id="mintBlue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#34f4a4"/>
+      <stop offset="1" stop-color="#3bdcff"/>
+    </linearGradient>
+    <radialGradient id="fur" cx="47%" cy="33%" r="72%">
+      <stop offset="0" stop-color="#fffaf2"/>
+      <stop offset="0.66" stop-color="#f0eee9"/>
+      <stop offset="1" stop-color="#d3d8df"/>
+    </radialGradient>
+    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
 
-                            <!-- Element Gradients -->
-                            <linearGradient id="pink-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#FF007A"></stop>
-                                <stop offset="100%" stop-color="#FF4D4D"></stop>
-                            </linearGradient>
-                            <linearGradient id="cyan-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#00F0FF"></stop>
-                                <stop offset="100%" stop-color="#0057FF"></stop>
-                            </linearGradient>
-                            <linearGradient id="bolt-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#FFF200"></stop>
-                                <stop offset="50%" stop-color="#FF007A"></stop>
-                                <stop offset="100%" stop-color="#7928CA"></stop>
-                            </linearGradient>
+  <rect x="18" y="18" width="476" height="476" rx="112" fill="url(#bg)"/>
+  <rect x="23" y="23" width="466" height="466" rx="107" fill="none" stroke="#42cfff" stroke-width="5" opacity="0.85" filter="url(#softGlow)"/>
+  <rect x="52" y="61" width="408" height="394" rx="78" fill="#0a1520" stroke="#1f4e78" stroke-width="3" opacity="0.95"/>
 
-                            <!-- Glow Filter -->
-                            <filter id="super-glow" x="-50%" y="-50%" width="200%" height="200%">
-                                <feGaussianBlur in="SourceGraphic" stdDeviation="16" result="blur1"></feGaussianBlur>
-                                <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur2"></feGaussianBlur>
-                                <feMerge>
-                                    <feMergeNode in="blur1"></feMergeNode>
-                                    <feMergeNode in="blur2"></feMergeNode>
-                                    <feMergeNode in="SourceGraphic"></feMergeNode>
-                                </feMerge>
-                            </filter>
-                        </defs>
+  <g opacity="0.42" stroke-linecap="round" stroke-width="7">
+    <path d="M88 126h45" stroke="#3bdcff"/>
+    <path d="M83 163h69" stroke="#7d68ff"/>
+    <path d="M91 199h55" stroke="#2489ff"/>
+    <path d="M371 150h42" stroke="#3bdcff"/>
+    <path d="M360 189h70" stroke="#2489ff"/>
+    <path d="M381 228h46" stroke="#7d68ff"/>
+  </g>
 
-                        <!-- Base Squircle Shape -->
-                        <rect width="512" height="512" rx="120" fill="url(#bg-grad)"></rect>
-                        
-                        <!-- Background Oscilloscope Waves (Fun/Data Vibe) -->
-                        <path d="M -50 256 C 80 120, 170 120, 256 256 C 340 392, 430 392, 560 256" fill="none" stroke="rgba(255, 0, 122, 0.08)" stroke-width="6" stroke-linecap="round"></path>
-                        <path d="M -50 256 C 80 392, 170 392, 256 256 C 340 120, 430 120, 560 256" fill="none" stroke="rgba(0, 240, 255, 0.08)" stroke-width="6" stroke-linecap="round"></path>
+  <text x="83" y="351" fill="#61f4ff" font-family="Consolas, monospace" font-size="74" font-weight="700" filter="url(#softGlow)">{</text>
+  <text x="393" y="351" fill="#61f4ff" font-family="Consolas, monospace" font-size="74" font-weight="700" filter="url(#softGlow)">}</text>
 
-                        <!-- Center Tech Ring -->
-                        <circle cx="256" cy="256" r="110" fill="none" stroke="rgba(255, 255, 255, 0.05)" stroke-width="4" stroke-dasharray="12 12"></circle>
+  <g>
+    <circle cx="151" cy="146" r="60" fill="#090b11" stroke="#65eaff" stroke-width="5"/>
+    <circle cx="361" cy="146" r="60" fill="#090b11" stroke="#65eaff" stroke-width="5"/>
+    <ellipse cx="256" cy="267" rx="164" ry="151" fill="url(#fur)"/>
+    <path d="M218 143c19-37 61-38 80 0-23-14-56-13-80 0Z" fill="#fffaf2"/>
+    <path d="M166 254c10-38 42-57 79-43 0 48-23 83-59 81-19-1-29-15-20-38Z" fill="#111219"/>
+    <path d="M346 254c-10-38-42-57-79-43 0 48 23 83 59 81 19-1 29-15 20-38Z" fill="#111219"/>
+  </g>
 
-                        <!-- API Braces { } -->
-                        <!-- Left Brace -->
-                        <path d="M 150 130 C 110 130, 110 180, 110 210 C 110 230, 100 246, 80 256 C 100 266, 110 282, 110 302 C 110 332, 110 382, 150 382" fill="none" stroke="url(#pink-grad)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" filter="url(#super-glow)"></path>
-                        
-                        <!-- Right Brace -->
-                        <path d="M 362 130 C 402 130, 402 180, 402 210 C 402 230, 412 246, 432 256 C 412 266, 402 282, 402 302 C 402 332, 402 382, 362 382" fill="none" stroke="url(#cyan-grad)" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" filter="url(#super-glow)"></path>
+  <g>
+    <rect x="124" y="198" width="123" height="94" rx="28" fill="#07101b" opacity="0.9"/>
+    <rect x="124" y="198" width="123" height="94" rx="28" fill="none" stroke="#07090e" stroke-width="14"/>
+    <rect x="124" y="198" width="123" height="94" rx="28" fill="none" stroke="#92f7ff" stroke-width="4" opacity="0.55"/>
+    <rect x="265" y="198" width="123" height="94" rx="28" fill="#07101b" opacity="0.9"/>
+    <rect x="265" y="198" width="123" height="94" rx="28" fill="none" stroke="#07090e" stroke-width="14"/>
+    <rect x="265" y="198" width="123" height="94" rx="28" fill="none" stroke="#92f7ff" stroke-width="4" opacity="0.55"/>
+    <path d="M246 241h20" stroke="#07090e" stroke-width="15" stroke-linecap="round"/>
+    <circle cx="190" cy="247" r="28" fill="#ffffff"/>
+    <circle cx="190" cy="247" r="20" fill="#111623"/>
+    <circle cx="199" cy="238" r="7" fill="#ffffff"/>
+    <circle cx="322" cy="247" r="28" fill="#ffffff"/>
+    <circle cx="322" cy="247" r="20" fill="#111623"/>
+    <circle cx="331" cy="238" r="7" fill="#ffffff"/>
+    <path d="M155 264h47M301 264h47" stroke="url(#cyanBlue)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M166 280h52M291 280h52" stroke="url(#mintBlue)" stroke-width="6" stroke-linecap="round"/>
+  </g>
 
-                        <!-- Center Testing Thunderbolt -->
-                        <path d="M 290 106 L 180 266 L 250 266 L 210 406 L 330 236 L 260 236 Z" fill="url(#bolt-grad)" stroke="url(#bolt-grad)" stroke-width="6" stroke-linejoin="round" filter="url(#super-glow)"></path>
+  <path d="M225 316c18-22 44-22 62 0-9 20-53 20-62 0Z" fill="#07090e"/>
+  <path d="M246 337c-11 20-39 20-50 0M266 337c11 20 39 20 50 0" fill="none" stroke="#0a0b0f" stroke-width="8" stroke-linecap="round"/>
 
-                        <!-- Floating Energy Sparks -->
-                        <circle cx="210" cy="160" r="5" fill="#FFF200" filter="url(#super-glow)"></circle>
-                        <circle cx="310" cy="350" r="7" fill="#00F0FF" filter="url(#super-glow)"></circle>
-                        <circle cx="170" cy="320" r="4" fill="#FF007A" filter="url(#super-glow)"></circle>
-                        <circle cx="340" cy="180" r="4" fill="#FF007A" filter="url(#super-glow)"></circle>
-
-                        <!-- Glassmorphism Bevel & Vignette -->
-                        <rect width="512" height="512" rx="120" fill="url(#vignette)" pointer-events="none"></rect>
-                        <rect width="510" height="510" x="1" y="1" rx="119" fill="none" stroke="url(#glass-edge)" stroke-width="2" pointer-events="none"></rect>
-                    </svg>
+  <g filter="url(#softGlow)">
+    <path d="M167 408h105" stroke="#1c9fff" stroke-width="13" stroke-linecap="round"/>
+    <path d="M250 386l34 29-34 29" fill="none" stroke="#54e7ff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M348 431H243" stroke="#23f2aa" stroke-width="13" stroke-linecap="round"/>
+    <path d="M265 409l-34 29 34 29" fill="none" stroke="#3bf3a6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

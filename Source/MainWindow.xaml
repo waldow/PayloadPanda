@@ -48,7 +48,9 @@
                 <!-- App Title -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="16,0,0,0">
-                    <TextBlock Text="&#x26A1;" FontSize="18" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                    <Image Source="app.ico" Width="18" Height="18" Margin="0,0,8,0"
+                           VerticalAlignment="Center" SnapsToDevicePixels="True"
+                           RenderOptions.BitmapScalingMode="HighQuality"/>
                     <TextBlock Text="PayloadPanda" FontSize="16" FontWeight="SemiBold"
                                Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
                     <TextBlock Text="v0.5" FontSize="11" Foreground="{DynamicResource TextMuted}"
