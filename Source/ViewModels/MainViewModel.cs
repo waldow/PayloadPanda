@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.IO;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -184,6 +186,7 @@ public partial class MainViewModel : ObservableObject
     partial void OnAuthPasswordChanged(string value) => ResetAutosaveTimer();
     partial void OnApiKeyHeaderChanged(string value) => ResetAutosaveTimer();
     partial void OnApiKeyValueChanged(string value) => ResetAutosaveTimer();
+    partial void OnCurrentResponseChanged(ResponseModel? value) => DownloadResponseCommand.NotifyCanExecuteChanged();
 
     private void OnCollectionChangedForAutosave(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -414,6 +417,40 @@ public partial class MainViewModel : ObservableObject
             StatusText = "Response copied to clipboard";
         }
     }
+
+    [RelayCommand(CanExecute = nameof(CanDownloadResponse))]
+    private async Task DownloadResponseAsync()
+    {
+        if (CurrentResponse is not { } response)
+        {
+            StatusText = "No response to download";
+            return;
+        }
+
+        var suggestedFileName = GetResponseDownloadFileName(response);
+        var extension = Path.GetExtension(suggestedFileName);
+        var dialog = new SaveFileDialog
+        {
+            Filter = BuildDownloadFilter(extension),
+            DefaultExt = string.IsNullOrEmpty(extension) ? ".bin" : extension,
+            FileName = suggestedFileName
+        };
+
+        if (dialog.ShowDialog() != true)
+            return;
+
+        try
+        {
+            await File.WriteAllBytesAsync(dialog.FileName, response.BodyBytes);
+            StatusText = $"Downloaded {Path.GetFileName(dialog.FileName)}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            StatusText = $"Download failed: {ex.Message}";
+        }
+    }
+
+    private bool CanDownloadResponse() => CurrentResponse is not null;
 
     [RelayCommand]
     private void CopyAsCurl()
@@ -918,6 +955,163 @@ public partial class MainViewModel : ObservableObject
         }
 
         return sb.ToString();
+    }
+
+    private string GetResponseDownloadFileName(ResponseModel response)
+    {
+        var extension = GetDefaultExtension(response);
+        var fileName = GetContentDispositionFileName(response);
+
+        if (string.IsNullOrWhiteSpace(fileName))
+            fileName = GetRequestUrlFileName();
+
+        if (string.IsNullOrWhiteSpace(fileName))
+            fileName = $"response-{DateTime.Now:yyyyMMdd-HHmmss}{extension}";
+
+        fileName = SanitizeFileName(fileName);
+
+        if (!Path.HasExtension(fileName))
+            fileName += extension;
+
+        return fileName;
+    }
+
+    private static string GetContentDispositionFileName(ResponseModel response)
+    {
+        if (!TryGetHeader(response, "Content-Disposition", out var contentDisposition))
+            return string.Empty;
+
+        if (ContentDispositionHeaderValue.TryParse(contentDisposition, out var parsed))
+        {
+            var fileName = FirstNonEmpty(parsed.FileNameStar, parsed.FileName);
+            if (!string.IsNullOrWhiteSpace(fileName))
+                return TrimFileNameQuotes(fileName);
+        }
+
+        return ExtractContentDispositionFileName(contentDisposition);
+    }
+
+    private string GetRequestUrlFileName()
+    {
+        if (!Uri.TryCreate(RequestUrl, UriKind.Absolute, out var uri))
+            return string.Empty;
+
+        var fileName = Path.GetFileName(uri.LocalPath);
+        return string.IsNullOrWhiteSpace(fileName) ? string.Empty : Uri.UnescapeDataString(fileName);
+    }
+
+    private static string ExtractContentDispositionFileName(string contentDisposition)
+    {
+        string? fileName = null;
+        string? fileNameStar = null;
+
+        foreach (var segment in contentDisposition.Split(';'))
+        {
+            var equalsIndex = segment.IndexOf('=');
+            if (equalsIndex < 0)
+                continue;
+
+            var key = segment[..equalsIndex].Trim();
+            var value = segment[(equalsIndex + 1)..].Trim();
+
+            if (key.Equals("filename*", StringComparison.OrdinalIgnoreCase))
+                fileNameStar = DecodeRfc5987FileName(value);
+            else if (key.Equals("filename", StringComparison.OrdinalIgnoreCase))
+                fileName = TrimFileNameQuotes(value);
+        }
+
+        return FirstNonEmpty(fileNameStar, fileName);
+    }
+
+    private static string DecodeRfc5987FileName(string value)
+    {
+        value = TrimFileNameQuotes(value);
+        var parts = value.Split('\'', 3);
+        var encodedFileName = parts.Length == 3 ? parts[2] : value;
+        return Uri.UnescapeDataString(encodedFileName);
+    }
+
+    private static string GetDefaultExtension(ResponseModel response)
+    {
+        var contentType = response.ContentType;
+        if (string.IsNullOrWhiteSpace(contentType) && TryGetHeader(response, "Content-Type", out var headerContentType))
+            contentType = headerContentType;
+
+        var mediaType = contentType.Split(';', 2)[0].Trim().ToLowerInvariant();
+        return mediaType switch
+        {
+            "application/json" => ".json",
+            "application/pdf" => ".pdf",
+            "application/xml" => ".xml",
+            "application/zip" => ".zip",
+            "application/vnd.ms-excel" => ".xls",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+            "image/gif" => ".gif",
+            "image/jpeg" => ".jpg",
+            "image/png" => ".png",
+            "text/csv" => ".csv",
+            "text/html" => ".html",
+            "text/plain" => ".txt",
+            "text/xml" => ".xml",
+            _ => ".bin"
+        };
+    }
+
+    private static string BuildDownloadFilter(string extension)
+    {
+        if (string.IsNullOrWhiteSpace(extension))
+            return "All Files (*.*)|*.*";
+
+        extension = extension.StartsWith('.') ? extension : "." + extension;
+        var label = extension[1..].ToUpperInvariant();
+        return $"{label} Files (*{extension})|*{extension}|All Files (*.*)|*.*";
+    }
+
+    private static bool TryGetHeader(ResponseModel response, string headerName, out string value)
+    {
+        foreach (var header in response.Headers)
+        {
+            if (header.Key.Equals(headerName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = header.Value;
+                return true;
+            }
+        }
+
+        value = string.Empty;
+        return false;
+    }
+
+    private static string SanitizeFileName(string fileName)
+    {
+        var sanitized = TrimFileNameQuotes(fileName).Trim();
+
+        foreach (var invalidChar in Path.GetInvalidFileNameChars())
+            sanitized = sanitized.Replace(invalidChar, '_');
+
+        sanitized = sanitized.Trim(' ', '.');
+        return string.IsNullOrWhiteSpace(sanitized) ? "response" : sanitized;
+    }
+
+    private static string TrimFileNameQuotes(string value)
+    {
+        value = value.Trim();
+        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+            value = value[1..^1];
+
+        return value.Replace("\\\"", "\"");
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return string.Empty;
     }
 
     private static string TryFormatJson(string input)
