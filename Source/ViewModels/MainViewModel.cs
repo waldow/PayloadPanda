@@ -84,6 +84,12 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _apiKeyValue = string.Empty;
 
+    [ObservableProperty]
+    private int _requestTimeoutSeconds = 30;
+
+    [ObservableProperty]
+    private bool _requestFollowRedirects = true;
+
     // ==================== Response State ====================
 
     [ObservableProperty]
@@ -186,6 +192,8 @@ public partial class MainViewModel : ObservableObject
     partial void OnAuthPasswordChanged(string value) => ResetAutosaveTimer();
     partial void OnApiKeyHeaderChanged(string value) => ResetAutosaveTimer();
     partial void OnApiKeyValueChanged(string value) => ResetAutosaveTimer();
+    partial void OnRequestTimeoutSecondsChanged(int value) => ResetAutosaveTimer();
+    partial void OnRequestFollowRedirectsChanged(bool value) => ResetAutosaveTimer();
     partial void OnCurrentResponseChanged(ResponseModel? value) => DownloadResponseCommand.NotifyCanExecuteChanged();
 
     private void OnCollectionChangedForAutosave(object? sender, NotifyCollectionChangedEventArgs e)
@@ -264,6 +272,13 @@ public partial class MainViewModel : ObservableObject
             RequestUrl = url;
         }
 
+        if (!IsRequestTimeoutValid())
+        {
+            StatusText = "Timeout must be between 1 and 300 seconds";
+            return;
+        }
+
+        ClearResponse();
         IsLoading = true;
         StatusText = "Sending...";
         _cts = new CancellationTokenSource();
@@ -330,18 +345,17 @@ public partial class MainViewModel : ObservableObject
         catch (HttpRequestException ex)
         {
             StatusText = $"Error: {ex.Message}";
-            CurrentResponse = null;
-            ResponseBody = string.Empty;
-            RawResponseBody = string.Empty;
-            ResponseHeaders = [];
+            ClearResponse();
         }
         catch (OperationCanceledException)
         {
             StatusText = _cts?.IsCancellationRequested == true ? "Request cancelled" : "Request timed out";
+            ClearResponse();
         }
         catch (Exception ex)
         {
             StatusText = $"Error: {ex.Message}";
+            ClearResponse();
         }
         finally
         {
@@ -514,11 +528,10 @@ public partial class MainViewModel : ObservableObject
         AuthPassword = string.Empty;
         ApiKeyHeader = "X-API-Key";
         ApiKeyValue = string.Empty;
+        RequestTimeoutSeconds = _settings.DefaultTimeoutSeconds;
+        RequestFollowRedirects = _settings.DefaultFollowRedirects;
 
-        CurrentResponse = null;
-        ResponseBody = string.Empty;
-        RawResponseBody = string.Empty;
-        ResponseHeaders = [];
+        ClearResponse();
 
         StatusText = "New request";
         _suppressAutosave = false;
@@ -797,6 +810,11 @@ public partial class MainViewModel : ObservableObject
     {
         _settings = await _persistenceService.LoadSettingsAsync();
         ApplySettings();
+
+        _suppressAutosave = true;
+        RequestTimeoutSeconds = _settings.DefaultTimeoutSeconds;
+        RequestFollowRedirects = _settings.DefaultFollowRedirects;
+        _suppressAutosave = false;
     }
 
     public async Task LoadHistoryFromDiskAsync()
@@ -880,8 +898,8 @@ public partial class MainViewModel : ObservableObject
             AuthPassword = AuthPassword,
             ApiKeyHeader = ApiKeyHeader,
             ApiKeyValue = ApiKeyValue,
-            TimeoutSeconds = _settings.DefaultTimeoutSeconds,
-            FollowRedirects = _settings.DefaultFollowRedirects
+            TimeoutSeconds = Math.Clamp(RequestTimeoutSeconds, 1, 300),
+            FollowRedirects = RequestFollowRedirects
         };
     }
 
@@ -910,6 +928,20 @@ public partial class MainViewModel : ObservableObject
         AuthPassword = request.AuthPassword;
         ApiKeyHeader = request.ApiKeyHeader;
         ApiKeyValue = request.ApiKeyValue;
+        RequestTimeoutSeconds = request.TimeoutSeconds is >= 1 and <= 300
+            ? request.TimeoutSeconds
+            : _settings.DefaultTimeoutSeconds;
+        RequestFollowRedirects = request.FollowRedirects;
+    }
+
+    private bool IsRequestTimeoutValid() => RequestTimeoutSeconds is >= 1 and <= 300;
+
+    private void ClearResponse()
+    {
+        CurrentResponse = null;
+        ResponseBody = string.Empty;
+        RawResponseBody = string.Empty;
+        ResponseHeaders = [];
     }
 
     private string GenerateCurlCommand()
@@ -918,6 +950,12 @@ public partial class MainViewModel : ObservableObject
 
         if (SelectedMethod != HttpMethodType.GET)
             sb.Append($" -X {SelectedMethod}");
+
+        if (RequestFollowRedirects)
+            sb.Append(" -L");
+
+        if (IsRequestTimeoutValid())
+            sb.Append($" --max-time {RequestTimeoutSeconds}");
 
         sb.Append($" '{RequestUrl}'");
 

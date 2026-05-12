@@ -572,6 +572,23 @@
                                 LineNumbersForeground="{DynamicResource TextMuted}"/>
                         </Grid>
                     </TabItem>
+
+                    <!-- Options Tab -->
+                    <TabItem Header="Options">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12">
+                            <StackPanel MaxWidth="500">
+                                <Label Content="Timeout (seconds)"/>
+                                <TextBox Text="{Binding RequestTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
+                                         Width="100"
+                                         HorizontalAlignment="Left"
+                                         Margin="0,0,0,12"/>
+
+                                <CheckBox Content="Follow redirects"
+                                          IsChecked="{Binding RequestFollowRedirects}"
+                                          Margin="0,0,0,8"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
                 </TabControl>
 
                 <!-- Horizontal GridSplitter -->
