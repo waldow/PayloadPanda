@@ -160,6 +160,11 @@
                                 <ListBox.ItemTemplate>
                                     <DataTemplate DataType="{x:Type models:SavedRequest}">
                                         <Grid Margin="0,2">
+                                            <Grid.InputBindings>
+                                                <MouseBinding MouseAction="LeftClick"
+                                                              Command="{Binding Data.LoadSavedRequestCommand, Source={StaticResource Proxy}}"
+                                                              CommandParameter="{Binding}"/>
+                                            </Grid.InputBindings>
                                             <Grid.RowDefinitions>
                                                 <RowDefinition Height="Auto"/>
                                                 <RowDefinition Height="Auto"/>
@@ -197,6 +202,7 @@
                                             <Grid.ContextMenu>
                                                 <ContextMenu>
                                                     <MenuItem Header="Load"
+                                                              FontWeight="SemiBold"
                                                               Command="{Binding Data.LoadSavedRequestCommand, Source={StaticResource Proxy}}"
                                                               CommandParameter="{Binding}"/>
                                                     <Separator/>

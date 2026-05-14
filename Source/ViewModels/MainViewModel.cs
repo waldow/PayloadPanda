@@ -501,6 +501,7 @@ public partial class MainViewModel : ObservableObject
             ActiveSavedRequestId = null;
             ActiveRequestName = string.Empty;
             PopulateFromRequest(request);
+            ClearResponse();
             StatusText = $"Loaded {item.Method} {item.Url}";
         }
     }
@@ -587,6 +588,7 @@ public partial class MainViewModel : ObservableObject
         ActiveSavedRequestId = saved.Id;
         ActiveRequestName = saved.Name;
         PopulateFromRequest(saved.Request);
+        ClearResponse();
         SelectedSavedRequest = saved;
         StatusText = $"Loaded \"{saved.Name}\"";
 
