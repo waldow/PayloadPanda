@@ -15,6 +15,7 @@ Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cl
 - **Bamboo-simple storage** — saved requests, history, autosave, and settings are plain local JSON.
 - **Curl tamer** — import, export, copy, and reshape requests without losing the little details.
 - **AI import helper** — paste messy snippets and let the panda sort the payload from the leaves.
+- **X-ray vision** — flip to RAW mode and watch the panda crack open the connection: DNS, TCP, TLS handshake, certs, and the bytes on the wire.
 
 ## Features
 
@@ -32,6 +33,37 @@ Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cl
 - **Status color coding** — 2xx green, 4xx amber, 5xx red — with reason phrase, duration in ms, and response size.
 - **Cancel in-flight request** at any time (proper `CancellationToken` plumbing on `HttpClient`).
 - **Copy response body** to clipboard with one click.
+
+### Low-Level Connect (raw socket mode) 🔬
+
+Flip the **`HTTP | RAW`** pill in the URL bar and PayloadPanda stops using `HttpClient` — instead it opens the connection by hand over a raw `TcpClient` (wrapped in `SslStream` for HTTPS), writes a hand-built HTTP/1.1 request, and reports **everything `HttpClient` normally hides**. It's a network inspector and an API client in the same window.
+
+A new **Connection** response tab appears, led by a color-coded **timing waterfall**:
+
+```
+DNS   ▓▓ 12 ms
+TCP   ▓▓▓▓ 31 ms
+TLS   ▓▓▓▓▓▓▓ 88 ms
+TTFB  ▓▓▓ 24 ms
+──────────────────
+TLS 1.3 · TLS_AES_256_GCM_SHA384
+✔ cert valid · expires 2026-08-14
+```
+
+What you get on every raw send:
+- **Phase-by-phase timings** — DNS resolution, TCP connect, TLS handshake, and time-to-first-byte, drawn as proportional bars so the slow step is obvious at a glance.
+- **The endpoint, demystified** — every resolved IP, the address actually connected to, and the local/remote socket endpoints.
+- **Full TLS detail** — negotiated protocol (e.g. TLS 1.3), the exact cipher suite, and the validation result.
+- **The certificate chain** — leaf + intermediates as cards, each with subject, issuer, validity window, SANs, signature algorithm, serial, and a green / amber / red badge (valid / expiring soon / expired).
+- **The bytes on the wire** — the exact raw request sent and the raw response head received.
+- The familiar **Pretty / Raw / Headers** tabs still populate as usual, so you lose nothing by switching modes.
+
+Built for the curious and the stuck:
+- **See where it breaks.** If a connection fails, the Connection tab stays populated up to the failure and flags the exact phase — so you instantly know whether it's DNS, the TCP connect, or the TLS handshake that died, not just "request failed".
+- **Inspect even bad certificates.** The handshake records validation errors but doesn't reject, so you can examine expired or self-signed certs. The **SSL certificate verification** setting decides whether a bad cert is a hard error or just a noted warning.
+- **What you see is what's on the wire** — raw mode does *not* auto-decompress `gzip`/`deflate` bodies (size and headers are still accurate), and reuses your headers, auth, query params, and body exactly as composed.
+
+> Raw mode is a per-session toggle; saved requests and history work in both modes.
 
 ### Saved requests & history
 - **Saved request library** with create / load / rename / duplicate / delete — each request stored as its own JSON file under `%AppData%\PayloadPanda\requests\`.
@@ -60,6 +92,7 @@ Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cl
 | MVVM | [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) (`ObservableObject`, `[ObservableProperty]`, `[RelayCommand]`) |
 | Code editor | [AvalonEdit](https://github.com/icsharpcode/AvalonEdit) |
 | HTTP | `System.Net.Http.HttpClient` with `CancellationToken` |
+| Raw transport | `TcpClient` + `SslStream` (`System.Net.Sockets` / `System.Net.Security`) for Low-Level Connect mode |
 | Serialization | `System.Text.Json` (camelCase, indented) |
 | Persistence | JSON files under `%AppData%\PayloadPanda\` |
 
@@ -99,10 +132,11 @@ Source/
 
   Models/                # RequestModel, ResponseModel, SettingsModel,
                          # SavedRequest, HistoryItem, HeaderItem,
-                         # QueryParamItem, AiImportResult, Enums
+                         # QueryParamItem, AiImportResult, Enums,
+                         # ConnectionDiagnostics (raw-socket diagnostics)
   ViewModels/            # MainViewModel — central VM, all RelayCommands
   Views/                 # AiImportPanel, RenameDialog, SettingsWindow
-  Services/              # HttpService, PersistenceService,
+  Services/              # HttpService, RawSocketService, PersistenceService,
                          # SavedRequestService, AiImportService
   Converters/            # WPF value converters
   Helpers/               # BindingProxy
@@ -110,7 +144,7 @@ Source/
   images/                # app.ico
 ```
 
-Architecture is plain MVVM with a Services layer. `MainViewModel` orchestrates the UI; each service has a single concern (HTTP, persistence, saved requests, AI parsing).
+Architecture is plain MVVM with a Services layer. `MainViewModel` orchestrates the UI; each service has a single concern (HTTP, raw-socket diagnostics, persistence, saved requests, AI parsing). `RawSocketService` mirrors `HttpService`'s signature, so the view-model swaps transports with a single switch and the response tabs work unchanged.
 
 ## Where your data lives
 

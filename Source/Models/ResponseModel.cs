@@ -10,4 +10,10 @@ public class ResponseModel
     public TimeSpan Duration { get; set; }
     public string ContentType { get; set; } = string.Empty;
     public long ResponseSize { get; set; }
+
+    /// <summary>
+    /// Low-level connection diagnostics. Populated only by <c>RawSocketService</c>;
+    /// always null for responses produced by the standard <c>HttpService</c>.
+    /// </summary>
+    public ConnectionDiagnostics? Diagnostics { get; set; }
 }

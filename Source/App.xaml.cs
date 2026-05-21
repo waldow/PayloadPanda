@@ -7,10 +7,11 @@ namespace PayloadPanda;
 public partial class App : Application
 {
     public static HttpService HttpService { get; } = new();
+    public static RawSocketService RawSocketService { get; } = new();
     public static PersistenceService PersistenceService { get; } = new();
     public static AiImportService AiImportService { get; } = new();
     public static SavedRequestService SavedRequestService { get; } = new();
-    public static MainViewModel MainViewModel { get; } = new(HttpService, PersistenceService, AiImportService, SavedRequestService);
+    public static MainViewModel MainViewModel { get; } = new(HttpService, RawSocketService, PersistenceService, AiImportService, SavedRequestService);
 
     protected override async void OnStartup(StartupEventArgs e)
     {

@@ -679,4 +679,49 @@
         <Setter Property="Margin" Value="0,4"/>
     </Style>
 
+    <!-- ==================== MODE TOGGLE PILL (RadioButton segments) ==================== -->
+    <Style x:Key="ModeTogglePill" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="segment" Background="Transparent" CornerRadius="3" Padding="11,5">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="segment" Property="Background" Value="{StaticResource AccentBlue}"/>
+                            <Setter Property="Foreground" Value="White"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ==================== WATERFALL BAR (ProgressBar) ==================== -->
+    <Style x:Key="WaterfallBar" TargetType="ProgressBar">
+        <Setter Property="Height" Value="16"/>
+        <Setter Property="Minimum" Value="0"/>
+        <Setter Property="Background" Value="{StaticResource BgInput}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Border x:Name="PART_Track" Background="{TemplateBinding Background}"
+                            CornerRadius="3" ClipToBounds="True">
+                        <Border x:Name="PART_Indicator" HorizontalAlignment="Left"
+                                Background="{TemplateBinding Foreground}" CornerRadius="3"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
 </ResourceDictionary>

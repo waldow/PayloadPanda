@@ -365,12 +365,29 @@
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
+                        <!-- Transport mode pill: HTTP (HttpClient) vs RAW (low-level socket) -->
+                        <Border Grid.Column="0" CornerRadius="4" Margin="0,0,8,0" Padding="2"
+                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                Background="{DynamicResource BgInput}">
+                            <StackPanel Orientation="Horizontal">
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="HTTP"
+                                             GroupName="RequestMode"
+                                             ToolTip="Standard request via HttpClient"
+                                             IsChecked="{Binding SelectedRequestMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=Http}"/>
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="RAW"
+                                             GroupName="RequestMode"
+                                             ToolTip="Low-level TCP/TLS socket — inspect DNS, handshake, certs and raw bytes"
+                                             IsChecked="{Binding SelectedRequestMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=RawSocket}"/>
+                            </StackPanel>
+                        </Border>
+
                         <!-- Method ComboBox (styled as pill) -->
-                        <Border Grid.Column="0" CornerRadius="4" Margin="0,0,8,0"
+                        <Border Grid.Column="1" CornerRadius="4" Margin="0,0,8,0"
                                 BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
                                 Background="{DynamicResource BgInput}">
                             <ComboBox ItemsSource="{Binding AvailableMethods}"
@@ -381,7 +398,7 @@
                         </Border>
 
                         <!-- URL TextBox -->
-                        <TextBox Grid.Column="1"
+                        <TextBox Grid.Column="2"
                                  Text="{Binding RequestUrl, UpdateSourceTrigger=PropertyChanged}"
                                  FontFamily="{DynamicResource CodeFont}"
                                  FontSize="14"
@@ -393,7 +410,7 @@
                         </TextBox>
 
                         <!-- Send / Cancel Button -->
-                        <Grid Grid.Column="2">
+                        <Grid Grid.Column="3">
                             <Button Content="&#x26A1; Send"
                                     Style="{StaticResource PrimaryButton}"
                                     Command="{Binding SendCommand}"
@@ -722,6 +739,174 @@
                                     </DataGridTextColumn>
                                 </DataGrid.Columns>
                             </DataGrid>
+                        </TabItem>
+
+                        <!-- Connection Tab (low-level / raw socket diagnostics) -->
+                        <TabItem Header="Connection"
+                                 Visibility="{Binding HasDiagnostics, Converter={StaticResource BoolToVisibility}}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,12"
+                                          DataContext="{Binding ConnectionDiagnostics}">
+                                <StackPanel>
+
+                                    <!-- Failure banner -->
+                                    <Border Margin="0,0,0,16" Padding="12,10" CornerRadius="6"
+                                            Background="#2D1418" BorderBrush="#5C2329" BorderThickness="1"
+                                            Visibility="{Binding HasError, Converter={StaticResource BoolToVisibility}}">
+                                        <StackPanel>
+                                            <TextBlock Foreground="#F85149" FontWeight="Bold" FontSize="13">
+                                                <Run Text="✕ "/><Run Text="{Binding FailedPhase, Mode=OneWay}"/><Run Text=" phase failed"/>
+                                            </TextBlock>
+                                            <TextBlock Text="{Binding ErrorMessage}" Foreground="{DynamicResource TextPrimary}"
+                                                       FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Endpoint summary -->
+                                    <TextBlock Text="ENDPOINT" Foreground="{DynamicResource TextSecondary}"
+                                               FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <Grid Margin="0,0,0,18">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="140"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Host" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,2"/>
+                                        <TextBlock Grid.Row="0" Grid.Column="1" FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextPrimary}" FontSize="12" Margin="0,2" TextWrapping="Wrap">
+                                            <Run Text="{Binding Scheme, Mode=OneWay}"/><Run Text="://"/><Run Text="{Binding Host, Mode=OneWay}"/><Run Text=":"/><Run Text="{Binding Port, Mode=OneWay}"/>
+                                        </TextBlock>
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Resolved IPs" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,2"/>
+                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding ResolvedIpSummary}" FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextPrimary}" FontSize="12" Margin="0,2" TextWrapping="Wrap"/>
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Connected to" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,2"/>
+                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding RemoteEndpoint}" FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextPrimary}" FontSize="12" Margin="0,2"/>
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Local endpoint" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,2"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding LocalEndpoint}" FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextPrimary}" FontSize="12" Margin="0,2"/>
+                                    </Grid>
+
+                                    <!-- Timing waterfall -->
+                                    <TextBlock Text="TIMING" Foreground="{DynamicResource TextSecondary}"
+                                               FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <ItemsControl ItemsSource="{Binding DataContext.TimingPhases, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                  Margin="0,0,0,8">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,3">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="52"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="70"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding Label}" VerticalAlignment="Center"
+                                                               FontFamily="{DynamicResource CodeFont}" FontSize="11"
+                                                               Foreground="{Binding Label, Converter={StaticResource DiagnosticBrush}}"/>
+                                                    <ProgressBar Grid.Column="1" Style="{StaticResource WaterfallBar}"
+                                                                 Value="{Binding Milliseconds, Mode=OneWay}"
+                                                                 Maximum="{Binding ScaleMax, Mode=OneWay}"
+                                                                 Foreground="{Binding Label, Converter={StaticResource DiagnosticBrush}}"
+                                                                 VerticalAlignment="Center"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding MsDisplay}" VerticalAlignment="Center"
+                                                               TextAlignment="Right" FontFamily="{DynamicResource CodeFont}"
+                                                               FontSize="11" Foreground="{DynamicResource TextPrimary}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <TextBlock Margin="0,2,0,18" FontSize="11" Foreground="{DynamicResource TextSecondary}">
+                                        <Run Text="Total: "/><Run FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextPrimary}" Text="{Binding Timings.TotalMs, Mode=OneWay, StringFormat={}{0:F0} ms}"/>
+                                    </TextBlock>
+
+                                    <!-- TLS -->
+                                    <StackPanel Visibility="{Binding IsSecure, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBlock Text="TLS" Foreground="{DynamicResource TextSecondary}"
+                                                   FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                        <Grid Margin="0,0,0,18">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="140"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Protocol" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding TlsProtocol}" FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource AccentGreen}" FontSize="12" FontWeight="SemiBold" Margin="0,2"/>
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Cipher suite" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CipherSuite}" FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextPrimary}" FontSize="12" Margin="0,2" TextWrapping="Wrap"/>
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Validation" Foreground="{DynamicResource TextSecondary}" FontSize="12" Margin="0,2"/>
+                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding SslPolicyErrors}" FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextPrimary}" FontSize="12" Margin="0,2"/>
+                                        </Grid>
+                                    </StackPanel>
+
+                                    <!-- Certificates -->
+                                    <StackPanel Visibility="{Binding CertificatesPresent, Converter={StaticResource BoolToVisibility}}">
+                                        <TextBlock Text="CERTIFICATE CHAIN" Foreground="{DynamicResource TextSecondary}"
+                                                   FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                        <ItemsControl ItemsSource="{Binding Certificates}" Margin="0,0,0,18">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{DynamicResource BgPanel}" BorderBrush="{DynamicResource BorderBrush}"
+                                                            BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,0,0,8">
+                                                        <StackPanel>
+                                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                                                <Border Background="{DynamicResource BgInput}" CornerRadius="3" Padding="6,2" Margin="0,0,6,0">
+                                                                    <TextBlock Text="{Binding Role}" FontSize="10" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}"/>
+                                                                </Border>
+                                                                <Border CornerRadius="3" Padding="6,2"
+                                                                        Background="{Binding Status, Converter={StaticResource DiagnosticBrush}}">
+                                                                    <TextBlock Text="{Binding Status}" FontSize="10" FontWeight="SemiBold" Foreground="White"/>
+                                                                </Border>
+                                                            </StackPanel>
+                                                            <TextBlock Text="{Binding Subject}" FontFamily="{DynamicResource CodeFont}" FontSize="12" Foreground="{DynamicResource TextPrimary}" TextWrapping="Wrap"/>
+                                                            <TextBlock Margin="0,3,0,0" FontSize="11" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap">
+                                                                <Run Text="Issuer: "/><Run Text="{Binding Issuer, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                            <TextBlock Margin="0,2,0,0" FontSize="11" Foreground="{DynamicResource TextSecondary}">
+                                                                <Run Text="Valid: "/><Run Text="{Binding NotBefore, Mode=OneWay, StringFormat=yyyy-MM-dd}"/><Run Text="  →  "/><Run Text="{Binding NotAfter, Mode=OneWay, StringFormat=yyyy-MM-dd}"/>
+                                                            </TextBlock>
+                                                            <TextBlock Margin="0,2,0,0" FontSize="11" Foreground="{DynamicResource TextSecondary}" TextWrapping="Wrap">
+                                                                <Run Text="SAN: "/><Run Text="{Binding SansSummary, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                            <TextBlock Margin="0,2,0,0" FontSize="11" Foreground="{DynamicResource TextMuted}" FontFamily="{DynamicResource CodeFont}" TextWrapping="Wrap">
+                                                                <Run Text="{Binding SignatureAlgorithm, Mode=OneWay}"/><Run Text="  ·  SN "/><Run Text="{Binding SerialNumber, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+
+                                    <!-- Raw request -->
+                                    <TextBlock Text="RAW REQUEST" Foreground="{DynamicResource TextSecondary}"
+                                               FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <TextBox Text="{Binding RawRequest, Mode=OneWay}" IsReadOnly="True"
+                                             FontFamily="{DynamicResource CodeFont}" FontSize="12"
+                                             Background="{DynamicResource BgInput}" BorderThickness="1"
+                                             BorderBrush="{DynamicResource BorderBrush}"
+                                             TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto"
+                                             Padding="10" Margin="0,0,0,18"/>
+
+                                    <!-- Raw response head -->
+                                    <TextBlock Text="RAW RESPONSE HEAD" Foreground="{DynamicResource TextSecondary}"
+                                               FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                                    <TextBox Text="{Binding RawResponseHead, Mode=OneWay}" IsReadOnly="True"
+                                             FontFamily="{DynamicResource CodeFont}" FontSize="12"
+                                             Background="{DynamicResource BgInput}" BorderThickness="1"
+                                             BorderBrush="{DynamicResource BorderBrush}"
+                                             TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto"
+                                             Padding="10"/>
+                                </StackPanel>
+                            </ScrollViewer>
                         </TabItem>
                     </TabControl>
                 </Grid>

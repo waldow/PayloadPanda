@@ -27,3 +27,18 @@ public enum AuthMode
     Basic,
     ApiKey
 }
+
+public enum RequestMode
+{
+    Http,
+    RawSocket
+}
+
+public enum RequestPhase
+{
+    Dns,
+    TcpConnect,
+    TlsHandshake,
+    SendRequest,
+    ReadResponse
+}

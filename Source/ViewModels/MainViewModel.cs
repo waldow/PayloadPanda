@@ -19,6 +19,7 @@ namespace PayloadPanda.ViewModels;
 public partial class MainViewModel : ObservableObject
 {
     private readonly HttpService _httpService;
+    private readonly RawSocketService _rawSocketService;
     private readonly PersistenceService _persistenceService;
     private readonly AiImportService _aiImportService;
     private readonly SavedRequestService _savedRequestService;
@@ -30,10 +31,12 @@ public partial class MainViewModel : ObservableObject
     private Timer? _autosaveTimer;
     private bool _suppressAutosave;
 
-    public MainViewModel(HttpService httpService, PersistenceService persistenceService,
-        AiImportService aiImportService, SavedRequestService savedRequestService)
+    public MainViewModel(HttpService httpService, RawSocketService rawSocketService,
+        PersistenceService persistenceService, AiImportService aiImportService,
+        SavedRequestService savedRequestService)
     {
         _httpService = httpService;
+        _rawSocketService = rawSocketService;
         _persistenceService = persistenceService;
         _aiImportService = aiImportService;
         _savedRequestService = savedRequestService;
@@ -90,6 +93,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _requestFollowRedirects = true;
 
+    [ObservableProperty]
+    private RequestMode _selectedRequestMode = RequestMode.Http;
+
     // ==================== Response State ====================
 
     [ObservableProperty]
@@ -103,6 +109,15 @@ public partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private ObservableCollection<KeyValuePair<string, string>> _responseHeaders = [];
+
+    [ObservableProperty]
+    private ConnectionDiagnostics? _connectionDiagnostics;
+
+    [ObservableProperty]
+    private bool _hasDiagnostics;
+
+    [ObservableProperty]
+    private ObservableCollection<TimingPhaseRow> _timingPhases = [];
 
     // ==================== UI State ====================
 
@@ -286,12 +301,17 @@ public partial class MainViewModel : ObservableObject
         try
         {
             var requestModel = BuildRequestModel();
-            var response = await _httpService.SendAsync(requestModel, _cts.Token);
+            var response = SelectedRequestMode == RequestMode.RawSocket
+                ? await _rawSocketService.SendAsync(requestModel, _cts.Token)
+                : await _httpService.SendAsync(requestModel, _cts.Token);
 
             CurrentResponse = response;
             RawResponseBody = response.Body;
             ResponseBody = TryFormatJson(response.Body);
             ResponseHeaders = new ObservableCollection<KeyValuePair<string, string>>(response.Headers);
+            SetDiagnostics(response.Diagnostics);
+            if (response.Diagnostics != null)
+                SelectedResponseTabIndex = ConnectionTabIndex;
 
             StatusText = $"{response.StatusCode} {response.ReasonPhrase} — {response.Duration.TotalMilliseconds:F0}ms";
 
@@ -351,6 +371,15 @@ public partial class MainViewModel : ObservableObject
         {
             StatusText = _cts?.IsCancellationRequested == true ? "Request cancelled" : "Request timed out";
             ClearResponse();
+        }
+        catch (RawSocketException ex)
+        {
+            // Keep the diagnostics gathered up to the failure so the Connection tab
+            // can show which phase broke and everything that happened before it.
+            ClearResponse();
+            SetDiagnostics(ex.Diagnostics);
+            SelectedResponseTabIndex = ConnectionTabIndex;
+            StatusText = $"Error: {ex.Message}";
         }
         catch (Exception ex)
         {
@@ -861,6 +890,7 @@ public partial class MainViewModel : ObservableObject
     {
         _persistenceService.SetHistoryFilePath(_settings.HistoryFilePath);
         _httpService.SslVerification = _settings.SslCertificateVerification;
+        _rawSocketService.SslVerification = _settings.SslCertificateVerification;
         _aiImportService.Configure(_settings.OpenAiApiKey, _settings.AiEndpoint, _settings.AiTimeoutSeconds);
         EditorFontSize = _settings.EditorFontSize;
         EditorWordWrap = _settings.EditorWordWrap;
@@ -938,12 +968,45 @@ public partial class MainViewModel : ObservableObject
 
     private bool IsRequestTimeoutValid() => RequestTimeoutSeconds is >= 1 and <= 300;
 
+    // Index of the "Connection" tab in the response TabControl (Pretty, Raw, Headers, Connection).
+    private const int ConnectionTabIndex = 3;
+
     private void ClearResponse()
     {
         CurrentResponse = null;
         ResponseBody = string.Empty;
         RawResponseBody = string.Empty;
         ResponseHeaders = [];
+        ConnectionDiagnostics = null;
+        HasDiagnostics = false;
+        TimingPhases = [];
+    }
+
+    private void SetDiagnostics(ConnectionDiagnostics? diagnostics)
+    {
+        ConnectionDiagnostics = diagnostics;
+        HasDiagnostics = diagnostics != null;
+        TimingPhases = diagnostics != null ? BuildTimingPhases(diagnostics) : [];
+    }
+
+    private static ObservableCollection<TimingPhaseRow> BuildTimingPhases(ConnectionDiagnostics diagnostics)
+    {
+        var t = diagnostics.Timings;
+        var rows = new List<TimingPhaseRow>
+        {
+            new() { Label = "DNS", Milliseconds = t.DnsMs },
+            new() { Label = "TCP", Milliseconds = t.TcpConnectMs }
+        };
+        if (diagnostics.IsSecure)
+            rows.Add(new TimingPhaseRow { Label = "TLS", Milliseconds = t.TlsHandshakeMs });
+        rows.Add(new TimingPhaseRow { Label = "TTFB", Milliseconds = t.TimeToFirstByteMs });
+
+        // Share one scale across all bars so their lengths are directly comparable.
+        var scaleMax = Math.Max(rows.Max(r => r.Milliseconds), 1);
+        foreach (var row in rows)
+            row.ScaleMax = scaleMax;
+
+        return new ObservableCollection<TimingPhaseRow>(rows);
     }
 
     private string GenerateCurlCommand()

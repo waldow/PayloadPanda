@@ -16,6 +16,8 @@
             <converters:FileSizeConverter x:Key="FileSizeConverter"/>
             <converters:AuthModeToVisibilityConverter x:Key="AuthModeToVisibility"/>
             <converters:NullToVisibilityConverter x:Key="NullToVisibility"/>
+            <converters:EnumMatchToBoolConverter x:Key="EnumMatchToBool"/>
+            <converters:DiagnosticBrushConverter x:Key="DiagnosticBrush"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
