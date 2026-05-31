@@ -1,9 +1,7 @@
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
-using ICSharpCode.AvalonEdit.Highlighting;
 
 namespace PayloadPanda;
 
@@ -13,19 +11,6 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = App.MainViewModel;
-
-        // Set up AvalonEdit syntax highlighting
-        var jsonHighlighting = HighlightingManager.Instance.GetDefinition("JavaScript");
-        RequestBodyEditor.SyntaxHighlighting = jsonHighlighting;
-        ResponsePrettyEditor.SyntaxHighlighting = jsonHighlighting;
-
-        // Bind AvalonEdit text (it doesn't support standard WPF binding)
-        RequestBodyEditor.TextChanged += (s, e) =>
-        {
-            App.MainViewModel.RequestBody = RequestBodyEditor.Text;
-        };
-
-        App.MainViewModel.PropertyChanged += ViewModel_PropertyChanged;
         StateChanged += MainWindow_StateChanged;
     }
 
@@ -34,29 +19,6 @@ public partial class MainWindow : Window
         base.OnSourceInitialized(e);
         var handle = new WindowInteropHelper(this).Handle;
         HwndSource.FromHwnd(handle)?.AddHook(WndProc);
-    }
-
-    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(ViewModels.MainViewModel.RequestBody))
-        {
-            if (RequestBodyEditor.Text != App.MainViewModel.RequestBody)
-                RequestBodyEditor.Text = App.MainViewModel.RequestBody;
-        }
-        else if (e.PropertyName == nameof(ViewModels.MainViewModel.ResponseBody))
-        {
-            ResponsePrettyEditor.Text = App.MainViewModel.ResponseBody;
-        }
-        else if (e.PropertyName == nameof(ViewModels.MainViewModel.EditorFontSize))
-        {
-            RequestBodyEditor.FontSize = App.MainViewModel.EditorFontSize;
-            ResponsePrettyEditor.FontSize = App.MainViewModel.EditorFontSize;
-        }
-        else if (e.PropertyName == nameof(ViewModels.MainViewModel.EditorWordWrap))
-        {
-            RequestBodyEditor.WordWrap = App.MainViewModel.EditorWordWrap;
-            ResponsePrettyEditor.WordWrap = App.MainViewModel.EditorWordWrap;
-        }
     }
 
     private void MinimizeButton_Click(object sender, RoutedEventArgs e)

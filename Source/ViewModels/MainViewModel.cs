@@ -1,13 +1,7 @@
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
-using System.ComponentModel;
-using System.IO;
 using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Text;
 using System.Text.Json;
 using System.Windows;
-using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
@@ -23,128 +17,43 @@ public partial class MainViewModel : ObservableObject
     private readonly PersistenceService _persistenceService;
     private readonly AiImportService _aiImportService;
     private readonly SavedRequestService _savedRequestService;
+    private readonly RequestTabSessionService _tabSessionService;
     private SettingsModel _settings = new();
-    private CancellationTokenSource? _cts;
     private CancellationTokenSource? _aiImportCts;
-
-    // Autosave timer: fires once after 2s of inactivity, then must be reset
-    private Timer? _autosaveTimer;
-    private bool _suppressAutosave;
+    private Timer? _tabSessionSaveTimer;
+    private bool _suppressTabSessionSave;
 
     public MainViewModel(HttpService httpService, RawSocketService rawSocketService,
         PersistenceService persistenceService, AiImportService aiImportService,
-        SavedRequestService savedRequestService)
+        SavedRequestService savedRequestService, RequestTabSessionService tabSessionService)
     {
         _httpService = httpService;
         _rawSocketService = rawSocketService;
         _persistenceService = persistenceService;
         _aiImportService = aiImportService;
         _savedRequestService = savedRequestService;
+        _tabSessionService = tabSessionService;
 
         AiImportSelectedModel = _aiImportService.AvailableModels[0];
 
-        RequestHeaders.Add(new HeaderItem());
-        QueryParams.Add(new QueryParamItem());
-
-        // Subscribe to collection changes for autosave
-        RequestHeaders.CollectionChanged += OnCollectionChangedForAutosave;
-        QueryParams.CollectionChanged += OnCollectionChangedForAutosave;
+        _suppressTabSessionSave = true;
+        AddBlankTab(select: true);
+        _suppressTabSessionSave = false;
     }
 
-    // ==================== Request State ====================
+    public ObservableCollection<RequestWorkspaceViewModel> Tabs { get; } = [];
 
     [ObservableProperty]
-    private HttpMethodType _selectedMethod = HttpMethodType.GET;
-
-    [ObservableProperty]
-    private string _requestUrl = string.Empty;
-
-    public ObservableCollection<HeaderItem> RequestHeaders { get; } = [];
-
-    public ObservableCollection<QueryParamItem> QueryParams { get; } = [];
-
-    [ObservableProperty]
-    private BodyMode _selectedBodyMode = BodyMode.None;
-
-    [ObservableProperty]
-    private string _requestBody = string.Empty;
-
-    [ObservableProperty]
-    private AuthMode _selectedAuthMode = AuthMode.None;
-
-    [ObservableProperty]
-    private string _authToken = string.Empty;
-
-    [ObservableProperty]
-    private string _authUsername = string.Empty;
-
-    [ObservableProperty]
-    private string _authPassword = string.Empty;
-
-    [ObservableProperty]
-    private string _apiKeyHeader = "X-API-Key";
-
-    [ObservableProperty]
-    private string _apiKeyValue = string.Empty;
-
-    [ObservableProperty]
-    private int _requestTimeoutSeconds = 30;
-
-    [ObservableProperty]
-    private bool _requestFollowRedirects = true;
-
-    [ObservableProperty]
-    private RequestMode _selectedRequestMode = RequestMode.Http;
-
-    // ==================== Response State ====================
-
-    [ObservableProperty]
-    private ResponseModel? _currentResponse;
-
-    [ObservableProperty]
-    private string _responseBody = string.Empty;
-
-    [ObservableProperty]
-    private string _rawResponseBody = string.Empty;
-
-    [ObservableProperty]
-    private ObservableCollection<KeyValuePair<string, string>> _responseHeaders = [];
-
-    [ObservableProperty]
-    private ConnectionDiagnostics? _connectionDiagnostics;
-
-    [ObservableProperty]
-    private bool _hasDiagnostics;
-
-    [ObservableProperty]
-    private ObservableCollection<TimingPhaseRow> _timingPhases = [];
-
-    // ==================== UI State ====================
-
-    [ObservableProperty]
-    private int _selectedRequestTabIndex;
-
-    [ObservableProperty]
-    private int _selectedResponseTabIndex;
-
-    [ObservableProperty]
-    private bool _isLoading;
-
-    [ObservableProperty]
-    private string _statusText = "Ready";
+    private RequestWorkspaceViewModel? _selectedTab;
 
     [ObservableProperty]
     private int _leftPanelTabIndex;
-
-    // ==================== Editor Settings ====================
 
     [ObservableProperty]
     private int _editorFontSize = 13;
 
     [ObservableProperty]
     private bool _editorWordWrap = true;
-
-    // ==================== AI Import State ====================
 
     [ObservableProperty]
     private bool _isAiImportPanelOpen;
@@ -169,258 +78,110 @@ public partial class MainViewModel : ObservableObject
 
     public string[] AiImportAvailableModels => _aiImportService.AvailableModels;
 
-    // ==================== History ====================
-
     public ObservableCollection<HistoryItem> HistoryItems { get; } = [];
 
     [ObservableProperty]
     private HistoryItem? _selectedHistoryItem;
-
-    // ==================== Saved Requests ====================
 
     public ObservableCollection<SavedRequest> SavedRequests { get; } = [];
 
     [ObservableProperty]
     private SavedRequest? _selectedSavedRequest;
 
-    [ObservableProperty]
-    private Guid? _activeSavedRequestId;
+    public SettingsModel CurrentSettings => _settings;
 
-    [ObservableProperty]
-    private string _activeRequestName = string.Empty;
-
-    // ==================== Enums for ComboBox binding ====================
-
-    public HttpMethodType[] AvailableMethods { get; } = Enum.GetValues<HttpMethodType>();
-    public BodyMode[] AvailableBodyModes { get; } = Enum.GetValues<BodyMode>();
-    public AuthMode[] AvailableAuthModes { get; } = Enum.GetValues<AuthMode>();
-
-    // ==================== Autosave Partial Methods ====================
-
-    partial void OnSelectedMethodChanged(HttpMethodType value) => ResetAutosaveTimer();
-    partial void OnRequestUrlChanged(string value) => ResetAutosaveTimer();
-    partial void OnRequestBodyChanged(string value) => ResetAutosaveTimer();
-    partial void OnSelectedBodyModeChanged(BodyMode value) => ResetAutosaveTimer();
-    partial void OnSelectedAuthModeChanged(AuthMode value) => ResetAutosaveTimer();
-    partial void OnAuthTokenChanged(string value) => ResetAutosaveTimer();
-    partial void OnAuthUsernameChanged(string value) => ResetAutosaveTimer();
-    partial void OnAuthPasswordChanged(string value) => ResetAutosaveTimer();
-    partial void OnApiKeyHeaderChanged(string value) => ResetAutosaveTimer();
-    partial void OnApiKeyValueChanged(string value) => ResetAutosaveTimer();
-    partial void OnRequestTimeoutSecondsChanged(int value) => ResetAutosaveTimer();
-    partial void OnRequestFollowRedirectsChanged(bool value) => ResetAutosaveTimer();
-    partial void OnCurrentResponseChanged(ResponseModel? value) => DownloadResponseCommand.NotifyCanExecuteChanged();
-
-    private void OnCollectionChangedForAutosave(object? sender, NotifyCollectionChangedEventArgs e)
+    partial void OnSelectedTabChanged(RequestWorkspaceViewModel? value)
     {
-        // Subscribe to PropertyChanged on new items
-        if (e.NewItems != null)
-        {
-            foreach (var item in e.NewItems)
-            {
-                if (item is INotifyPropertyChanged npc)
-                    npc.PropertyChanged += OnItemPropertyChangedForAutosave;
-            }
-        }
-        // Unsubscribe from removed items
-        if (e.OldItems != null)
-        {
-            foreach (var item in e.OldItems)
-            {
-                if (item is INotifyPropertyChanged npc)
-                    npc.PropertyChanged -= OnItemPropertyChangedForAutosave;
-            }
-        }
-        ResetAutosaveTimer();
-    }
-
-    private void OnItemPropertyChangedForAutosave(object? sender, PropertyChangedEventArgs e)
-    {
-        ResetAutosaveTimer();
-    }
-
-    private void ResetAutosaveTimer()
-    {
-        if (_suppressAutosave) return;
-        _autosaveTimer?.Dispose();
-        _autosaveTimer = new Timer(_ =>
-        {
-            Application.Current?.Dispatcher.BeginInvoke(PerformAutosave);
-        }, null, 2000, Timeout.Infinite);
-    }
-
-    private async void PerformAutosave()
-    {
-        try
-        {
-            var request = BuildRequestModel();
-            var saved = new SavedRequest
-            {
-                Id = ActiveSavedRequestId ?? Guid.Empty,
-                Name = ActiveRequestName,
-                Request = request
-            };
-            await _savedRequestService.SaveAutosaveAsync(saved);
-        }
-        catch
-        {
-            // Autosave is best-effort
-        }
-    }
-
-    // ==================== Commands ====================
-
-    [RelayCommand]
-    private async Task SendAsync()
-    {
-        if (string.IsNullOrWhiteSpace(RequestUrl))
-        {
-            StatusText = "Please enter a URL";
-            return;
-        }
-
-        var url = RequestUrl.Trim();
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            url = "https://" + url;
-            RequestUrl = url;
-        }
-
-        if (!IsRequestTimeoutValid())
-        {
-            StatusText = "Timeout must be between 1 and 300 seconds";
-            return;
-        }
-
-        ClearResponse();
-        IsLoading = true;
-        StatusText = "Sending...";
-        _cts = new CancellationTokenSource();
-
-        try
-        {
-            var requestModel = BuildRequestModel();
-            var response = SelectedRequestMode == RequestMode.RawSocket
-                ? await _rawSocketService.SendAsync(requestModel, _cts.Token)
-                : await _httpService.SendAsync(requestModel, _cts.Token);
-
-            CurrentResponse = response;
-            RawResponseBody = response.Body;
-            ResponseBody = TryFormatJson(response.Body);
-            ResponseHeaders = new ObservableCollection<KeyValuePair<string, string>>(response.Headers);
-            SetDiagnostics(response.Diagnostics);
-            if (response.Diagnostics != null)
-                SelectedResponseTabIndex = ConnectionTabIndex;
-
-            StatusText = $"{response.StatusCode} {response.ReasonPhrase} — {response.Duration.TotalMilliseconds:F0}ms";
-
-            // Auto-save request
-            SavedRequest savedReq;
-            if (ActiveSavedRequestId.HasValue)
-            {
-                // Update existing saved request
-                savedReq = SavedRequests.FirstOrDefault(r => r.Id == ActiveSavedRequestId.Value)
-                           ?? new SavedRequest { Name = $"{SelectedMethod} {RequestUrl}" };
-                savedReq.Request = requestModel;
-                savedReq.ModifiedAt = DateTime.Now;
-            }
-            else
-            {
-                // Create new saved request
-                savedReq = new SavedRequest
-                {
-                    Name = $"{SelectedMethod} {RequestUrl}",
-                    Request = requestModel
-                };
-                ActiveSavedRequestId = savedReq.Id;
-                ActiveRequestName = savedReq.Name;
-                SavedRequests.Insert(0, savedReq);
-            }
-            await _savedRequestService.SaveAsync(savedReq);
-
-            // Ensure it's at top of list if already exists
-            if (SavedRequests.Contains(savedReq) && SavedRequests.IndexOf(savedReq) != 0)
-            {
-                SavedRequests.Remove(savedReq);
-                SavedRequests.Insert(0, savedReq);
-            }
-
-            // Add to history with saved request link
-            var historyItem = new HistoryItem
-            {
-                Timestamp = DateTime.Now,
-                Method = SelectedMethod,
-                Url = RequestUrl,
-                StatusCode = response.StatusCode,
-                Duration = response.Duration,
-                RequestSnapshot = _persistenceService.SerializeRequest(requestModel),
-                SavedRequestId = savedReq.Id,
-                SavedRequestName = savedReq.Name
-            };
-            HistoryItems.Insert(0, historyItem);
-            TrimHistory();
-            _ = _persistenceService.SaveHistoryAsync(HistoryItems.ToList());
-        }
-        catch (HttpRequestException ex)
-        {
-            StatusText = $"Error: {ex.Message}";
-            ClearResponse();
-        }
-        catch (OperationCanceledException)
-        {
-            StatusText = _cts?.IsCancellationRequested == true ? "Request cancelled" : "Request timed out";
-            ClearResponse();
-        }
-        catch (RawSocketException ex)
-        {
-            // Keep the diagnostics gathered up to the failure so the Connection tab
-            // can show which phase broke and everything that happened before it.
-            ClearResponse();
-            SetDiagnostics(ex.Diagnostics);
-            SelectedResponseTabIndex = ConnectionTabIndex;
-            StatusText = $"Error: {ex.Message}";
-        }
-        catch (Exception ex)
-        {
-            StatusText = $"Error: {ex.Message}";
-            ClearResponse();
-        }
-        finally
-        {
-            IsLoading = false;
-            _cts?.Dispose();
-            _cts = null;
-        }
+        CloseSelectedTabCommand.NotifyCanExecuteChanged();
+        DuplicateSelectedTabCommand.NotifyCanExecuteChanged();
+        ScheduleTabSessionSave();
     }
 
     [RelayCommand]
-    private void Cancel()
+    private void NewRequest()
     {
-        _cts?.Cancel();
-        StatusText = "Cancelling...";
+        AddBlankTab(select: true);
     }
 
-    // Export (was Save) — file dialog export
+    [RelayCommand(CanExecute = nameof(HasSelectedTab))]
+    private void CloseSelectedTab()
+    {
+        CloseTab(SelectedTab);
+    }
+
+    [RelayCommand]
+    private void CloseTab(RequestWorkspaceViewModel? tab)
+    {
+        if (tab is null)
+            return;
+
+        if (tab.IsDirty && !tab.IsBlank)
+        {
+            var result = MessageBox.Show(
+                "Close this unsaved request tab?",
+                "Close Tab",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (result != MessageBoxResult.Yes)
+                return;
+        }
+
+        tab.CancelCommand.Execute(null);
+        var index = Tabs.IndexOf(tab);
+        if (index >= 0)
+            Tabs.RemoveAt(index);
+
+        if (Tabs.Count == 0)
+        {
+            AddBlankTab(select: true);
+        }
+        else if (SelectedTab is null || !Tabs.Contains(SelectedTab))
+        {
+            SelectedTab = Tabs[Math.Clamp(index, 0, Tabs.Count - 1)];
+        }
+
+        ScheduleTabSessionSave();
+    }
+
+    [RelayCommand(CanExecute = nameof(HasSelectedTab))]
+    private void DuplicateSelectedTab()
+    {
+        if (SelectedTab is null)
+            return;
+
+        var duplicate = CreateWorkspace();
+        duplicate.LoadRequestDraft(CloneRequest(SelectedTab.BuildRequestModel()), "Duplicated tab", isDirty: true);
+        Tabs.Insert(Tabs.IndexOf(SelectedTab) + 1, duplicate);
+        SelectedTab = duplicate;
+    }
+
+    [RelayCommand]
+    private void NextTab()
+    {
+        if (Tabs.Count <= 1)
+            return;
+
+        var index = SelectedTab is null ? -1 : Tabs.IndexOf(SelectedTab);
+        SelectedTab = Tabs[(index + 1 + Tabs.Count) % Tabs.Count];
+    }
+
+    [RelayCommand]
+    private void PreviousTab()
+    {
+        if (Tabs.Count <= 1)
+            return;
+
+        var index = SelectedTab is null ? 0 : Tabs.IndexOf(SelectedTab);
+        SelectedTab = Tabs[(index - 1 + Tabs.Count) % Tabs.Count];
+    }
+
     [RelayCommand]
     private async Task ExportRequestAsync()
     {
-        var dialog = new SaveFileDialog
-        {
-            Filter = "JSON Files (*.json)|*.json|All Files (*.*)|*.*",
-            DefaultExt = ".json",
-            FileName = "request"
-        };
-
-        if (dialog.ShowDialog() == true)
-        {
-            var request = BuildRequestModel();
-            await _persistenceService.SaveRequestAsync(request, dialog.FileName);
-            StatusText = $"Exported to {System.IO.Path.GetFileName(dialog.FileName)}";
-        }
+        if (SelectedTab is not null)
+            await SelectedTab.ExportRequestAsync();
     }
 
-    // Import (was Load) — file dialog import
     [RelayCommand]
     private async Task ImportRequestAsync()
     {
@@ -435,12 +196,23 @@ public partial class MainViewModel : ObservableObject
             var request = await _persistenceService.LoadRequestAsync(dialog.FileName);
             if (request != null)
             {
-                ActiveSavedRequestId = null;
-                ActiveRequestName = string.Empty;
-                PopulateFromRequest(request);
-                StatusText = $"Imported {System.IO.Path.GetFileName(dialog.FileName)}";
+                var tab = GetSmartOpenTarget();
+                tab.LoadRequestDraft(request, $"Imported {System.IO.Path.GetFileName(dialog.FileName)}", isDirty: true);
             }
         }
+    }
+
+    [RelayCommand]
+    private void CopyAsCurl()
+    {
+        SelectedTab?.CopyAsCurl();
+    }
+
+    [RelayCommand]
+    private async Task SaveCurrentRequestAsync()
+    {
+        if (SelectedTab is not null)
+            await SelectedTab.SaveCurrentRequestAsync();
     }
 
     [RelayCommand]
@@ -448,70 +220,14 @@ public partial class MainViewModel : ObservableObject
     {
         HistoryItems.Clear();
         await _persistenceService.SaveHistoryAsync([]);
-        StatusText = "History cleared";
-    }
-
-    [RelayCommand]
-    private void CopyResponseBody()
-    {
-        if (!string.IsNullOrEmpty(ResponseBody))
-        {
-            Clipboard.SetText(ResponseBody);
-            StatusText = "Response copied to clipboard";
-        }
-    }
-
-    [RelayCommand(CanExecute = nameof(CanDownloadResponse))]
-    private async Task DownloadResponseAsync()
-    {
-        if (CurrentResponse is not { } response)
-        {
-            StatusText = "No response to download";
-            return;
-        }
-
-        var suggestedFileName = GetResponseDownloadFileName(response);
-        var extension = Path.GetExtension(suggestedFileName);
-        var dialog = new SaveFileDialog
-        {
-            Filter = BuildDownloadFilter(extension),
-            DefaultExt = string.IsNullOrEmpty(extension) ? ".bin" : extension,
-            FileName = suggestedFileName
-        };
-
-        if (dialog.ShowDialog() != true)
-            return;
-
-        try
-        {
-            await File.WriteAllBytesAsync(dialog.FileName, response.BodyBytes);
-            StatusText = $"Downloaded {Path.GetFileName(dialog.FileName)}";
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
-        {
-            StatusText = $"Download failed: {ex.Message}";
-        }
-    }
-
-    private bool CanDownloadResponse() => CurrentResponse is not null;
-
-    [RelayCommand]
-    private void CopyAsCurl()
-    {
-        var curl = GenerateCurlCommand();
-        if (!string.IsNullOrEmpty(curl))
-        {
-            Clipboard.SetText(curl);
-            StatusText = "Curl command copied to clipboard";
-        }
     }
 
     [RelayCommand]
     private void LoadHistoryItem(HistoryItem? item)
     {
-        if (item is null) return;
+        if (item is null)
+            return;
 
-        // Try to load from saved request if linked and still exists
         if (item.SavedRequestId.HasValue)
         {
             var saved = SavedRequests.FirstOrDefault(r => r.Id == item.SavedRequestId.Value);
@@ -522,113 +238,33 @@ public partial class MainViewModel : ObservableObject
             }
         }
 
-        // Fall back to snapshot
-        if (item.RequestSnapshot is null) return;
+        if (item.RequestSnapshot is null)
+            return;
+
         var request = _persistenceService.DeserializeRequest(item.RequestSnapshot);
         if (request != null)
         {
-            ActiveSavedRequestId = null;
-            ActiveRequestName = string.Empty;
-            PopulateFromRequest(request);
-            ClearResponse();
-            StatusText = $"Loaded {item.Method} {item.Url}";
+            var tab = GetSmartOpenTarget();
+            tab.LoadRequestDraft(request, $"Loaded {item.Method} {item.Url}", isDirty: true);
         }
-    }
-
-    // ==================== Saved Request Commands ====================
-
-    [RelayCommand]
-    private void NewRequest()
-    {
-        _suppressAutosave = true;
-        ActiveSavedRequestId = null;
-        ActiveRequestName = string.Empty;
-
-        SelectedMethod = HttpMethodType.GET;
-        RequestUrl = string.Empty;
-        RequestHeaders.Clear();
-        RequestHeaders.Add(new HeaderItem());
-        QueryParams.Clear();
-        QueryParams.Add(new QueryParamItem());
-        SelectedBodyMode = BodyMode.None;
-        RequestBody = string.Empty;
-        SelectedAuthMode = AuthMode.None;
-        AuthToken = string.Empty;
-        AuthUsername = string.Empty;
-        AuthPassword = string.Empty;
-        ApiKeyHeader = "X-API-Key";
-        ApiKeyValue = string.Empty;
-        RequestTimeoutSeconds = _settings.DefaultTimeoutSeconds;
-        RequestFollowRedirects = _settings.DefaultFollowRedirects;
-
-        ClearResponse();
-
-        StatusText = "New request";
-        _suppressAutosave = false;
-        _savedRequestService.ClearAutosave();
-    }
-
-    [RelayCommand]
-    private async Task SaveCurrentRequestAsync()
-    {
-        var requestModel = BuildRequestModel();
-
-        if (ActiveSavedRequestId.HasValue)
-        {
-            // Update existing
-            var existing = SavedRequests.FirstOrDefault(r => r.Id == ActiveSavedRequestId.Value);
-            if (existing != null)
-            {
-                existing.Request = requestModel;
-                existing.ModifiedAt = DateTime.Now;
-                await _savedRequestService.SaveAsync(existing);
-                StatusText = $"Saved \"{existing.Name}\"";
-                // Refresh collection to update UI
-                var idx = SavedRequests.IndexOf(existing);
-                if (idx >= 0)
-                {
-                    SavedRequests.RemoveAt(idx);
-                    SavedRequests.Insert(0, existing);
-                }
-                return;
-            }
-        }
-
-        // Create new
-        var name = string.IsNullOrWhiteSpace(RequestUrl) ? "New Request" : $"{SelectedMethod} {RequestUrl}";
-        var saved = new SavedRequest
-        {
-            Name = name,
-            Request = requestModel
-        };
-        ActiveSavedRequestId = saved.Id;
-        ActiveRequestName = saved.Name;
-        SavedRequests.Insert(0, saved);
-        await _savedRequestService.SaveAsync(saved);
-        StatusText = $"Saved \"{saved.Name}\"";
     }
 
     [RelayCommand]
     private void LoadSavedRequest(SavedRequest? saved)
     {
-        if (saved is null) return;
-        _suppressAutosave = true;
+        if (saved is null)
+            return;
 
-        ActiveSavedRequestId = saved.Id;
-        ActiveRequestName = saved.Name;
-        PopulateFromRequest(saved.Request);
-        ClearResponse();
+        var tab = GetSmartOpenTarget();
+        tab.LoadSavedRequest(saved);
         SelectedSavedRequest = saved;
-        StatusText = $"Loaded \"{saved.Name}\"";
-
-        _suppressAutosave = false;
-        ResetAutosaveTimer();
     }
 
     [RelayCommand]
     private async Task RenameSavedRequestAsync(SavedRequest? saved)
     {
-        if (saved is null) return;
+        if (saved is null)
+            return;
 
         var dialog = new Views.RenameDialog(saved.Name)
         {
@@ -641,87 +277,46 @@ public partial class MainViewModel : ObservableObject
             saved.ModifiedAt = DateTime.Now;
             await _savedRequestService.SaveAsync(saved);
 
-            if (ActiveSavedRequestId == saved.Id)
-                ActiveRequestName = saved.Name;
+            foreach (var tab in Tabs)
+                tab.RenameSavedRequestLink(saved.Id, saved.Name);
 
-            // Refresh the item in the collection to update UI
             var idx = SavedRequests.IndexOf(saved);
             if (idx >= 0)
             {
                 SavedRequests.RemoveAt(idx);
                 SavedRequests.Insert(idx, saved);
             }
-            StatusText = $"Renamed to \"{saved.Name}\"";
         }
     }
 
     [RelayCommand]
     private void DeleteSavedRequest(SavedRequest? saved)
     {
-        if (saved is null) return;
+        if (saved is null)
+            return;
 
         _savedRequestService.Delete(saved.Id);
         SavedRequests.Remove(saved);
 
-        if (ActiveSavedRequestId == saved.Id)
-        {
-            ActiveSavedRequestId = null;
-            ActiveRequestName = string.Empty;
-        }
-
-        StatusText = $"Deleted \"{saved.Name}\"";
+        foreach (var tab in Tabs)
+            tab.ClearSavedRequestLink(saved.Id);
     }
 
     [RelayCommand]
     private async Task DuplicateSavedRequestAsync(SavedRequest? saved)
     {
-        if (saved is null) return;
-
-        var requestJson = JsonSerializer.Serialize(saved.Request);
-        var clonedRequest = JsonSerializer.Deserialize<RequestModel>(requestJson) ?? new RequestModel();
+        if (saved is null)
+            return;
 
         var duplicate = new SavedRequest
         {
             Name = saved.Name + " (copy)",
-            Request = clonedRequest
+            Request = CloneRequest(saved.Request)
         };
 
         SavedRequests.Insert(0, duplicate);
         await _savedRequestService.SaveAsync(duplicate);
-        StatusText = $"Duplicated \"{saved.Name}\"";
     }
-
-    [RelayCommand]
-    private void AddHeaderRow()
-    {
-        RequestHeaders.Add(new HeaderItem());
-    }
-
-    [RelayCommand]
-    private void RemoveHeaderRow(HeaderItem? item)
-    {
-        if (item != null && RequestHeaders.Count > 1)
-        {
-            RequestHeaders.Remove(item);
-        }
-    }
-
-    [RelayCommand]
-    private void AddParamRow()
-    {
-        QueryParams.Add(new QueryParamItem());
-    }
-
-    [RelayCommand]
-    private void RemoveParamRow(QueryParamItem? item)
-    {
-        if (item != null && QueryParams.Count > 1)
-        {
-            QueryParams.Remove(item);
-        }
-    }
-
-    // ==================== AI Import Commands ====================
 
     [RelayCommand]
     private void OpenAiImport()
@@ -800,20 +395,14 @@ public partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void ApplyAiImport()
     {
-        if (AiImportResult?.Request is null) return;
+        if (AiImportResult?.Request is null)
+            return;
 
-        PopulateFromRequest(AiImportResult.Request);
-        StatusText = $"Imported {AiImportResult.Request.Method} {AiImportResult.Request.Url}";
+        var tab = GetSmartOpenTarget();
+        tab.LoadRequestDraft(AiImportResult.Request,
+            $"Imported {AiImportResult.Request.Method} {AiImportResult.Request.Url}", isDirty: true);
         IsAiImportPanelOpen = false;
     }
-
-    private static string FormatRequestPreviewJson(RequestModel request)
-    {
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        return JsonSerializer.Serialize(request, options);
-    }
-
-    // ==================== Settings Commands ====================
 
     [RelayCommand]
     private void OpenSettings()
@@ -829,62 +418,173 @@ public partial class MainViewModel : ObservableObject
             _settings = editCopy;
             ApplySettings();
             _ = _persistenceService.SaveSettingsAsync(_settings);
-            StatusText = "Settings saved";
         }
     }
-
-    // ==================== Public Methods ====================
-
-    public SettingsModel CurrentSettings => _settings;
 
     public async Task LoadSettingsFromDiskAsync()
     {
         _settings = await _persistenceService.LoadSettingsAsync();
         ApplySettings();
 
-        _suppressAutosave = true;
-        RequestTimeoutSeconds = _settings.DefaultTimeoutSeconds;
-        RequestFollowRedirects = _settings.DefaultFollowRedirects;
-        _suppressAutosave = false;
+        if (SelectedTab is { IsBlank: true, IsDirty: false } tab)
+            tab.ResetToBlank();
     }
 
     public async Task LoadHistoryFromDiskAsync()
     {
         var items = await _persistenceService.LoadHistoryAsync();
         foreach (var item in items)
-        {
             HistoryItems.Add(item);
-        }
     }
 
     public async Task LoadSavedRequestsFromDiskAsync()
     {
         var items = await _savedRequestService.LoadAllAsync();
         foreach (var item in items)
-        {
             SavedRequests.Add(item);
-        }
     }
 
-    public async Task RestoreAutosaveAsync()
+    public async Task RestoreTabsFromDiskAsync()
     {
-        var autosave = await _savedRequestService.LoadAutosaveAsync();
-        if (autosave?.Request is null) return;
+        var session = await _tabSessionService.LoadAsync();
 
-        _suppressAutosave = true;
+        _suppressTabSessionSave = true;
+        Tabs.Clear();
 
-        if (autosave.Id != Guid.Empty)
+        if (session?.Tabs.Count > 0)
         {
-            ActiveSavedRequestId = autosave.Id;
-            ActiveRequestName = autosave.Name;
+            foreach (var draft in session.Tabs)
+            {
+                var tab = CreateWorkspace();
+                tab.ApplyDraft(draft);
+                if (draft.SavedRequestId.HasValue)
+                {
+                    var saved = SavedRequests.FirstOrDefault(r => r.Id == draft.SavedRequestId.Value);
+                    if (saved != null)
+                        tab.RenameSavedRequestLink(saved.Id, saved.Name);
+                    else
+                        tab.ClearSavedRequestLink(draft.SavedRequestId.Value);
+                }
+                Tabs.Add(tab);
+            }
+
+            SelectedTab = Tabs[Math.Clamp(session.SelectedIndex, 0, Tabs.Count - 1)];
+        }
+        else
+        {
+            var autosave = await _savedRequestService.LoadAutosaveAsync();
+            if (autosave?.Request != null)
+            {
+                var tab = CreateWorkspace();
+                tab.LoadRequestDraft(autosave.Request, "Restored from autosave", isDirty: true);
+                if (autosave.Id != Guid.Empty)
+                {
+                    var saved = SavedRequests.FirstOrDefault(r => r.Id == autosave.Id);
+                    if (saved != null)
+                    {
+                        tab.ActiveSavedRequestId = saved.Id;
+                        tab.ActiveRequestName = saved.Name;
+                    }
+                }
+
+                Tabs.Add(tab);
+                SelectedTab = tab;
+                _savedRequestService.ClearAutosave();
+            }
+            else
+            {
+                AddBlankTab(select: true);
+            }
         }
 
-        PopulateFromRequest(autosave.Request);
-        StatusText = "Restored from autosave";
-        _suppressAutosave = false;
+        if (Tabs.Count == 0)
+            AddBlankTab(select: true);
+
+        _suppressTabSessionSave = false;
+        ScheduleTabSessionSave();
     }
 
-    // ==================== Private Helpers ====================
+    public async Task SaveTabsSessionNowAsync()
+    {
+        _tabSessionSaveTimer?.Dispose();
+        _tabSessionSaveTimer = null;
+
+        try
+        {
+            var selectedIndex = SelectedTab is null ? 0 : Math.Max(0, Tabs.IndexOf(SelectedTab));
+            var session = new RequestTabSession
+            {
+                SelectedIndex = selectedIndex,
+                Tabs = Tabs.Select(tab => tab.ToDraft()).ToList()
+            };
+            await _tabSessionService.SaveAsync(session).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Tab drafts are best-effort; saved requests remain the durable source.
+        }
+    }
+
+    internal void ScheduleTabSessionSave()
+    {
+        if (_suppressTabSessionSave)
+            return;
+
+        _tabSessionSaveTimer?.Dispose();
+        _tabSessionSaveTimer = new Timer(_ =>
+        {
+            Application.Current?.Dispatcher.BeginInvoke(SaveTabsSessionNowAsync);
+        }, null, 1000, Timeout.Infinite);
+    }
+
+    internal void AddHistoryItem(HistoryItem item)
+    {
+        HistoryItems.Insert(0, item);
+        TrimHistory();
+        _ = _persistenceService.SaveHistoryAsync(HistoryItems.ToList());
+    }
+
+    internal void MoveSavedRequestToTop(SavedRequest saved)
+    {
+        if (!SavedRequests.Contains(saved))
+        {
+            SavedRequests.Insert(0, saved);
+            return;
+        }
+
+        var idx = SavedRequests.IndexOf(saved);
+        if (idx > 0)
+        {
+            SavedRequests.RemoveAt(idx);
+            SavedRequests.Insert(0, saved);
+        }
+    }
+
+    private RequestWorkspaceViewModel AddBlankTab(bool select)
+    {
+        var tab = CreateWorkspace();
+        Tabs.Add(tab);
+        if (select)
+            SelectedTab = tab;
+        ScheduleTabSessionSave();
+        return tab;
+    }
+
+    private RequestWorkspaceViewModel CreateWorkspace()
+    {
+        return new RequestWorkspaceViewModel(this, _httpService, _rawSocketService,
+            _persistenceService, _savedRequestService);
+    }
+
+    private RequestWorkspaceViewModel GetSmartOpenTarget()
+    {
+        if (SelectedTab is { IsBlank: true } tab)
+            return tab;
+
+        return AddBlankTab(select: true);
+    }
+
+    private bool HasSelectedTab() => SelectedTab is not null;
 
     private void ApplySettings()
     {
@@ -894,6 +594,9 @@ public partial class MainViewModel : ObservableObject
         _aiImportService.Configure(_settings.OpenAiApiKey, _settings.AiEndpoint, _settings.AiTimeoutSeconds);
         EditorFontSize = _settings.EditorFontSize;
         EditorWordWrap = _settings.EditorWordWrap;
+
+        foreach (var tab in Tabs)
+            tab.ApplyEditorSettings(EditorFontSize, EditorWordWrap);
 
         if (_aiImportService.AvailableModels.Contains(_settings.AiDefaultModel))
             AiImportSelectedModel = _settings.AiDefaultModel;
@@ -908,328 +611,15 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private RequestModel BuildRequestModel()
+    private static RequestModel CloneRequest(RequestModel request)
     {
-        return new RequestModel
-        {
-            Method = SelectedMethod,
-            Url = RequestUrl,
-            Headers = RequestHeaders
-                .Where(h => !string.IsNullOrWhiteSpace(h.Key))
-                .Select(h => new HeaderItemData { Key = h.Key, Value = h.Value, IsEnabled = h.IsEnabled })
-                .ToList(),
-            QueryParams = QueryParams
-                .Where(p => !string.IsNullOrWhiteSpace(p.Key))
-                .Select(p => new QueryParamData { Key = p.Key, Value = p.Value, IsEnabled = p.IsEnabled })
-                .ToList(),
-            BodyMode = SelectedBodyMode,
-            BodyText = RequestBody,
-            AuthMode = SelectedAuthMode,
-            AuthToken = AuthToken,
-            AuthUsername = AuthUsername,
-            AuthPassword = AuthPassword,
-            ApiKeyHeader = ApiKeyHeader,
-            ApiKeyValue = ApiKeyValue,
-            TimeoutSeconds = Math.Clamp(RequestTimeoutSeconds, 1, 300),
-            FollowRedirects = RequestFollowRedirects
-        };
+        var json = JsonSerializer.Serialize(request);
+        return JsonSerializer.Deserialize<RequestModel>(json) ?? new RequestModel();
     }
 
-    private void PopulateFromRequest(RequestModel request)
+    private static string FormatRequestPreviewJson(RequestModel request)
     {
-        SelectedMethod = request.Method;
-        RequestUrl = request.Url;
-
-        RequestHeaders.Clear();
-        foreach (var h in request.Headers)
-            RequestHeaders.Add(new HeaderItem { Key = h.Key, Value = h.Value, IsEnabled = h.IsEnabled });
-        if (RequestHeaders.Count == 0)
-            RequestHeaders.Add(new HeaderItem());
-
-        QueryParams.Clear();
-        foreach (var p in request.QueryParams)
-            QueryParams.Add(new QueryParamItem { Key = p.Key, Value = p.Value, IsEnabled = p.IsEnabled });
-        if (QueryParams.Count == 0)
-            QueryParams.Add(new QueryParamItem());
-
-        SelectedBodyMode = request.BodyMode;
-        RequestBody = request.BodyText;
-        SelectedAuthMode = request.AuthMode;
-        AuthToken = request.AuthToken;
-        AuthUsername = request.AuthUsername;
-        AuthPassword = request.AuthPassword;
-        ApiKeyHeader = request.ApiKeyHeader;
-        ApiKeyValue = request.ApiKeyValue;
-        RequestTimeoutSeconds = request.TimeoutSeconds is >= 1 and <= 300
-            ? request.TimeoutSeconds
-            : _settings.DefaultTimeoutSeconds;
-        RequestFollowRedirects = request.FollowRedirects;
-    }
-
-    private bool IsRequestTimeoutValid() => RequestTimeoutSeconds is >= 1 and <= 300;
-
-    // Index of the "Connection" tab in the response TabControl (Pretty, Raw, Headers, Connection).
-    private const int ConnectionTabIndex = 3;
-
-    private void ClearResponse()
-    {
-        CurrentResponse = null;
-        ResponseBody = string.Empty;
-        RawResponseBody = string.Empty;
-        ResponseHeaders = [];
-        ConnectionDiagnostics = null;
-        HasDiagnostics = false;
-        TimingPhases = [];
-    }
-
-    private void SetDiagnostics(ConnectionDiagnostics? diagnostics)
-    {
-        ConnectionDiagnostics = diagnostics;
-        HasDiagnostics = diagnostics != null;
-        TimingPhases = diagnostics != null ? BuildTimingPhases(diagnostics) : [];
-    }
-
-    private static ObservableCollection<TimingPhaseRow> BuildTimingPhases(ConnectionDiagnostics diagnostics)
-    {
-        var t = diagnostics.Timings;
-        var rows = new List<TimingPhaseRow>
-        {
-            new() { Label = "DNS", Milliseconds = t.DnsMs },
-            new() { Label = "TCP", Milliseconds = t.TcpConnectMs }
-        };
-        if (diagnostics.IsSecure)
-            rows.Add(new TimingPhaseRow { Label = "TLS", Milliseconds = t.TlsHandshakeMs });
-        rows.Add(new TimingPhaseRow { Label = "TTFB", Milliseconds = t.TimeToFirstByteMs });
-
-        // Share one scale across all bars so their lengths are directly comparable.
-        var scaleMax = Math.Max(rows.Max(r => r.Milliseconds), 1);
-        foreach (var row in rows)
-            row.ScaleMax = scaleMax;
-
-        return new ObservableCollection<TimingPhaseRow>(rows);
-    }
-
-    private string GenerateCurlCommand()
-    {
-        var sb = new StringBuilder("curl");
-
-        if (SelectedMethod != HttpMethodType.GET)
-            sb.Append($" -X {SelectedMethod}");
-
-        if (RequestFollowRedirects)
-            sb.Append(" -L");
-
-        if (IsRequestTimeoutValid())
-            sb.Append($" --max-time {RequestTimeoutSeconds}");
-
-        sb.Append($" '{RequestUrl}'");
-
-        // Headers
-        foreach (var h in RequestHeaders.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
-            sb.Append($" \\\n  -H '{h.Key}: {h.Value}'");
-
-        // Auth
-        switch (SelectedAuthMode)
-        {
-            case AuthMode.Bearer:
-                sb.Append($" \\\n  -H 'Authorization: Bearer {AuthToken}'");
-                break;
-            case AuthMode.Basic:
-                sb.Append($" \\\n  -u '{AuthUsername}:{AuthPassword}'");
-                break;
-            case AuthMode.ApiKey:
-                var key = string.IsNullOrWhiteSpace(ApiKeyHeader) ? "X-API-Key" : ApiKeyHeader;
-                sb.Append($" \\\n  -H '{key}: {ApiKeyValue}'");
-                break;
-        }
-
-        // Body
-        if (SelectedBodyMode != BodyMode.None && !string.IsNullOrWhiteSpace(RequestBody))
-        {
-            var contentType = SelectedBodyMode switch
-            {
-                BodyMode.Json => "application/json",
-                BodyMode.Xml => "application/xml",
-                BodyMode.FormUrlEncoded => "application/x-www-form-urlencoded",
-                _ => "text/plain"
-            };
-            sb.Append($" \\\n  -H 'Content-Type: {contentType}'");
-            sb.Append($" \\\n  -d '{RequestBody.Replace("'", "'\\''")}'");
-        }
-
-        return sb.ToString();
-    }
-
-    private string GetResponseDownloadFileName(ResponseModel response)
-    {
-        var extension = GetDefaultExtension(response);
-        var fileName = GetContentDispositionFileName(response);
-
-        if (string.IsNullOrWhiteSpace(fileName))
-            fileName = GetRequestUrlFileName();
-
-        if (string.IsNullOrWhiteSpace(fileName))
-            fileName = $"response-{DateTime.Now:yyyyMMdd-HHmmss}{extension}";
-
-        fileName = SanitizeFileName(fileName);
-
-        if (!Path.HasExtension(fileName))
-            fileName += extension;
-
-        return fileName;
-    }
-
-    private static string GetContentDispositionFileName(ResponseModel response)
-    {
-        if (!TryGetHeader(response, "Content-Disposition", out var contentDisposition))
-            return string.Empty;
-
-        if (ContentDispositionHeaderValue.TryParse(contentDisposition, out var parsed))
-        {
-            var fileName = FirstNonEmpty(parsed.FileNameStar, parsed.FileName);
-            if (!string.IsNullOrWhiteSpace(fileName))
-                return TrimFileNameQuotes(fileName);
-        }
-
-        return ExtractContentDispositionFileName(contentDisposition);
-    }
-
-    private string GetRequestUrlFileName()
-    {
-        if (!Uri.TryCreate(RequestUrl, UriKind.Absolute, out var uri))
-            return string.Empty;
-
-        var fileName = Path.GetFileName(uri.LocalPath);
-        return string.IsNullOrWhiteSpace(fileName) ? string.Empty : Uri.UnescapeDataString(fileName);
-    }
-
-    private static string ExtractContentDispositionFileName(string contentDisposition)
-    {
-        string? fileName = null;
-        string? fileNameStar = null;
-
-        foreach (var segment in contentDisposition.Split(';'))
-        {
-            var equalsIndex = segment.IndexOf('=');
-            if (equalsIndex < 0)
-                continue;
-
-            var key = segment[..equalsIndex].Trim();
-            var value = segment[(equalsIndex + 1)..].Trim();
-
-            if (key.Equals("filename*", StringComparison.OrdinalIgnoreCase))
-                fileNameStar = DecodeRfc5987FileName(value);
-            else if (key.Equals("filename", StringComparison.OrdinalIgnoreCase))
-                fileName = TrimFileNameQuotes(value);
-        }
-
-        return FirstNonEmpty(fileNameStar, fileName);
-    }
-
-    private static string DecodeRfc5987FileName(string value)
-    {
-        value = TrimFileNameQuotes(value);
-        var parts = value.Split('\'', 3);
-        var encodedFileName = parts.Length == 3 ? parts[2] : value;
-        return Uri.UnescapeDataString(encodedFileName);
-    }
-
-    private static string GetDefaultExtension(ResponseModel response)
-    {
-        var contentType = response.ContentType;
-        if (string.IsNullOrWhiteSpace(contentType) && TryGetHeader(response, "Content-Type", out var headerContentType))
-            contentType = headerContentType;
-
-        var mediaType = contentType.Split(';', 2)[0].Trim().ToLowerInvariant();
-        return mediaType switch
-        {
-            "application/json" => ".json",
-            "application/pdf" => ".pdf",
-            "application/xml" => ".xml",
-            "application/zip" => ".zip",
-            "application/vnd.ms-excel" => ".xls",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
-            "image/gif" => ".gif",
-            "image/jpeg" => ".jpg",
-            "image/png" => ".png",
-            "text/csv" => ".csv",
-            "text/html" => ".html",
-            "text/plain" => ".txt",
-            "text/xml" => ".xml",
-            _ => ".bin"
-        };
-    }
-
-    private static string BuildDownloadFilter(string extension)
-    {
-        if (string.IsNullOrWhiteSpace(extension))
-            return "All Files (*.*)|*.*";
-
-        extension = extension.StartsWith('.') ? extension : "." + extension;
-        var label = extension[1..].ToUpperInvariant();
-        return $"{label} Files (*{extension})|*{extension}|All Files (*.*)|*.*";
-    }
-
-    private static bool TryGetHeader(ResponseModel response, string headerName, out string value)
-    {
-        foreach (var header in response.Headers)
-        {
-            if (header.Key.Equals(headerName, StringComparison.OrdinalIgnoreCase))
-            {
-                value = header.Value;
-                return true;
-            }
-        }
-
-        value = string.Empty;
-        return false;
-    }
-
-    private static string SanitizeFileName(string fileName)
-    {
-        var sanitized = TrimFileNameQuotes(fileName).Trim();
-
-        foreach (var invalidChar in Path.GetInvalidFileNameChars())
-            sanitized = sanitized.Replace(invalidChar, '_');
-
-        sanitized = sanitized.Trim(' ', '.');
-        return string.IsNullOrWhiteSpace(sanitized) ? "response" : sanitized;
-    }
-
-    private static string TrimFileNameQuotes(string value)
-    {
-        value = value.Trim();
-        if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-            value = value[1..^1];
-
-        return value.Replace("\\\"", "\"");
-    }
-
-    private static string FirstNonEmpty(params string?[] values)
-    {
-        foreach (var value in values)
-        {
-            if (!string.IsNullOrWhiteSpace(value))
-                return value;
-        }
-
-        return string.Empty;
-    }
-
-    private static string TryFormatJson(string input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-            return input;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(input);
-            return JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
-        }
-        catch
-        {
-            return input;
-        }
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        return JsonSerializer.Serialize(request, options);
     }
 }
