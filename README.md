@@ -15,6 +15,7 @@ Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cl
 - **Bamboo-simple storage** — saved requests, history, autosave, and settings are plain local JSON.
 - **Curl tamer** — import, export, copy, and reshape requests without losing the little details.
 - **AI import helper** — paste messy snippets and let the panda sort the payload from the leaves.
+- **CORS detective** — add browser-style `Origin` headers, run preflight checks, and see exactly why a browser would block a response.
 - **X-ray vision** — flip to RAW mode and watch the panda crack open the connection: DNS, TCP, TLS handshake, certs, and the bytes on the wire.
 
 ## Features
@@ -33,6 +34,15 @@ Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cl
 - **Status color coding** — 2xx green, 4xx amber, 5xx red — with reason phrase, duration in ms, and response size.
 - **Cancel in-flight request** at any time (proper `CancellationToken` plumbing on `HttpClient`).
 - **Copy response body** to clipboard with one click.
+
+### CORS troubleshooting
+- **Browser-style Origin testing** — enable CORS testing in the **Options** tab and PayloadPanda injects the configured `Origin` header into sends without permanently adding it to saved request headers.
+- **Preflight probe** — send an `OPTIONS` request with only the browser CORS preflight headers: `Origin`, `Access-Control-Request-Method`, and `Access-Control-Request-Headers`.
+- **Automatic requested-header detection** — leave `Access-Control-Request-Headers` blank to derive the preflight header list from the current request, including auth headers, API key headers, and non-simple body content types like JSON/XML.
+- **Credential checks** — toggle credentialed mode to verify `Access-Control-Allow-Credentials: true` and catch invalid wildcard-origin responses.
+- **Plain-English verdicts** — the CORS panel checks status, allowed origin, allowed method, allowed headers, credentials, and max-age, then reports pass/fail with the exact missing or mismatched header.
+
+> CORS analysis models browser rules; the desktop client itself is not blocked by CORS, so the verdict tells you what would happen from frontend JavaScript.
 
 ### Low-Level Connect (raw socket mode) 🔬
 
@@ -73,7 +83,7 @@ Built for the curious and the stuck:
 
 ### Import / export
 - **Import / export request as JSON** via standard file dialogs — share requests via git, Slack, or wherever.
-- **Copy as cURL** — turns the current request (verb, URL, headers, auth, body) into a ready-to-paste `curl` command.
+- **Copy as cURL** — turns the current request (verb, URL, headers, auth, body, and CORS Origin when enabled) into a ready-to-paste `curl` command.
 - **AI Import** — paste a curl command, OpenAPI/Swagger snippet, code sample, or plain-English description, and let an LLM extract a structured request (method, URL, headers, query params, body, auth). Preview the parsed JSON before applying. Uses any OpenAI-compatible Chat Completions endpoint, with configurable model (defaults include `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-5.2`, `gpt-5.4-nano`, `gpt-5.4-mini`).
 
 ### UI / UX
