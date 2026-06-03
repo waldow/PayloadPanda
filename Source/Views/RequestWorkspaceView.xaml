@@ -234,7 +234,7 @@
 
             <TabItem Header="Options">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="12">
-                    <StackPanel MaxWidth="500">
+                    <StackPanel MaxWidth="560">
                         <Label Content="Timeout (seconds)"/>
                         <TextBox Text="{Binding RequestTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}"
                                  Width="100"
@@ -244,6 +244,92 @@
                         <CheckBox Content="Follow redirects"
                                   IsChecked="{Binding RequestFollowRedirects}"
                                   Margin="0,0,0,8"/>
+
+                        <!-- CORS troubleshooting -->
+                        <Border Height="1" Background="{DynamicResource BorderBrush}" Margin="0,12,0,12"/>
+                        <TextBlock Text="CORS Troubleshooting"
+                                   FontWeight="Bold" FontSize="13"
+                                   Foreground="{DynamicResource TextPrimary}"
+                                   Margin="0,0,0,2"/>
+                        <TextBlock Text="Add an Origin to every request and run an OPTIONS preflight to see why a browser would block it."
+                                   TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{DynamicResource TextMuted}"
+                                   Margin="0,0,0,8"/>
+
+                        <CheckBox Content="Enable CORS testing"
+                                  IsChecked="{Binding CorsEnabled}"
+                                  Margin="0,0,0,8"/>
+
+                        <StackPanel Visibility="{Binding CorsEnabled, Converter={StaticResource BoolToVisibility}}">
+                            <Label Content="Origin"/>
+                            <TextBox Text="{Binding CorsOrigin, UpdateSourceTrigger=PropertyChanged}"
+                                     FontFamily="{DynamicResource CodeFont}"
+                                     Margin="0,0,0,8"
+                                     ToolTip="The site making the request, e.g. https://app.example.com"/>
+
+                            <Label Content="Access-Control-Request-Method (preflight)"/>
+                            <TextBox Text="{Binding CorsRequestMethod, UpdateSourceTrigger=PropertyChanged}"
+                                     FontFamily="{DynamicResource CodeFont}"
+                                     Margin="0,0,0,8"
+                                     ToolTip="Method the real request will use. Defaults to the selected method when blank."/>
+
+                            <Label Content="Access-Control-Request-Headers (preflight)"/>
+                            <TextBox Text="{Binding CorsRequestHeaders, UpdateSourceTrigger=PropertyChanged}"
+                                     FontFamily="{DynamicResource CodeFont}"
+                                     Margin="0,0,0,8"
+                                     ToolTip="Comma-separated custom headers, e.g. content-type, authorization"/>
+
+                            <CheckBox Content="Include credentials (cookies / Authorization)"
+                                      IsChecked="{Binding CorsIncludeCredentials}"
+                                      Margin="0,0,0,10"/>
+
+                            <Button Content="Send Preflight (OPTIONS)"
+                                    Style="{StaticResource GhostButton}"
+                                    Command="{Binding SendPreflightCommand}"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,0,0,12"/>
+
+                            <!-- Verdict -->
+                            <Border Visibility="{Binding HasCorsVerdict, Converter={StaticResource BoolToVisibility}}"
+                                    Background="{DynamicResource BgSurface}"
+                                    BorderBrush="{DynamicResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Padding="10">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding CorsVerdict.Summary}"
+                                               FontWeight="Bold"
+                                               TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextPrimary}"
+                                               Margin="0,0,0,8"/>
+                                    <ItemsControl ItemsSource="{Binding CorsVerdict.Checks}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="0,0,0,6">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <Border Grid.Column="0"
+                                                            Width="8" Height="8" CornerRadius="4"
+                                                            VerticalAlignment="Top" Margin="0,4,8,0"
+                                                            Background="{Binding Status, Converter={StaticResource CorsStatusToBrush}}"/>
+                                                    <StackPanel Grid.Column="1">
+                                                        <TextBlock Text="{Binding Label}"
+                                                                   FontWeight="SemiBold"
+                                                                   Foreground="{Binding Status, Converter={StaticResource CorsStatusToBrush}}"/>
+                                                        <TextBlock Text="{Binding Detail}"
+                                                                   TextWrapping="Wrap"
+                                                                   FontSize="11"
+                                                                   Foreground="{DynamicResource TextSecondary}"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

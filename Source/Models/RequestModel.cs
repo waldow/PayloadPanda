@@ -18,6 +18,13 @@ public class RequestModel
     public string ApiKeyValue { get; set; } = string.Empty;
     public int TimeoutSeconds { get; set; } = 30;
     public bool FollowRedirects { get; set; } = true;
+
+    // CORS troubleshooting
+    public bool CorsEnabled { get; set; } = false;
+    public string CorsOrigin { get; set; } = string.Empty;
+    public string CorsRequestMethod { get; set; } = string.Empty;   // Access-Control-Request-Method (preflight)
+    public string CorsRequestHeaders { get; set; } = string.Empty;  // Access-Control-Request-Headers (preflight)
+    public bool CorsIncludeCredentials { get; set; } = false;
 }
 
 public class HeaderItemData

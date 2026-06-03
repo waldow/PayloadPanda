@@ -93,6 +93,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         string.IsNullOrWhiteSpace(AuthPassword) &&
         string.IsNullOrWhiteSpace(ApiKeyValue) &&
         SelectedRequestMode == RequestMode.Http &&
+        !CorsEnabled &&
+        string.IsNullOrWhiteSpace(CorsOrigin) &&
         CurrentResponse is null &&
         !HasDiagnostics &&
         RequestHeaders.All(h => string.IsNullOrWhiteSpace(h.Key) && string.IsNullOrWhiteSpace(h.Value)) &&
@@ -136,6 +138,27 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _requestFollowRedirects = true;
+
+    [ObservableProperty]
+    private bool _corsEnabled;
+
+    [ObservableProperty]
+    private string _corsOrigin = string.Empty;
+
+    [ObservableProperty]
+    private string _corsRequestMethod = string.Empty;
+
+    [ObservableProperty]
+    private string _corsRequestHeaders = string.Empty;
+
+    [ObservableProperty]
+    private bool _corsIncludeCredentials;
+
+    [ObservableProperty]
+    private CorsAnalysisResult? _corsVerdict;
+
+    [ObservableProperty]
+    private bool _hasCorsVerdict;
 
     [ObservableProperty]
     private RequestMode _selectedRequestMode = RequestMode.Http;
@@ -200,6 +223,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     partial void OnApiKeyValueChanged(string value) => MarkRequestChanged();
     partial void OnRequestTimeoutSecondsChanged(int value) => MarkRequestChanged();
     partial void OnRequestFollowRedirectsChanged(bool value) => MarkRequestChanged();
+    partial void OnCorsEnabledChanged(bool value) => MarkRequestChanged();
+    partial void OnCorsOriginChanged(string value) => MarkRequestChanged();
+    partial void OnCorsRequestMethodChanged(string value) => MarkRequestChanged();
+    partial void OnCorsRequestHeadersChanged(string value) => MarkRequestChanged();
+    partial void OnCorsIncludeCredentialsChanged(bool value) => MarkRequestChanged();
     partial void OnSelectedRequestModeChanged(RequestMode value) => MarkRequestChanged();
     partial void OnSelectedRequestTabIndexChanged(int value) => MarkUiChanged();
     partial void OnSelectedResponseTabIndexChanged(int value) => MarkUiChanged();
@@ -291,6 +319,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         ApiKeyValue = string.Empty;
         RequestTimeoutSeconds = _owner.CurrentSettings.DefaultTimeoutSeconds;
         RequestFollowRedirects = _owner.CurrentSettings.DefaultFollowRedirects;
+        CorsEnabled = false;
+        CorsOrigin = string.Empty;
+        CorsRequestMethod = string.Empty;
+        CorsRequestHeaders = string.Empty;
+        CorsIncludeCredentials = false;
         SelectedRequestMode = RequestMode.Http;
         SelectedRequestTabIndex = 0;
         SelectedResponseTabIndex = 0;
@@ -324,35 +357,53 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     [RelayCommand]
     private async Task SendAsync()
     {
-        if (string.IsNullOrWhiteSpace(RequestUrl))
+        if (!TryPrepareUrl() || !ValidateTimeout())
+            return;
+
+        await RunRequestAsync(BuildSendModel(), persistAsSaved: true, isPreflight: false,
+            corsMethod: SelectedMethod.ToString());
+    }
+
+    [RelayCommand]
+    private async Task SendPreflightAsync()
+    {
+        if (!CorsEnabled)
         {
-            StatusText = "Please enter a URL";
+            StatusText = "Enable CORS testing first";
             return;
         }
 
-        var url = RequestUrl.Trim();
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            url = "https://" + url;
-            RequestUrl = url;
-        }
-
-        if (!IsRequestTimeoutValid())
-        {
-            StatusText = "Timeout must be between 1 and 300 seconds";
+        if (!TryPrepareUrl() || !ValidateTimeout())
             return;
-        }
 
+        var requestModel = BuildSendModel();
+        requestModel.Method = HttpMethodType.OPTIONS;
+        requestModel.BodyMode = BodyMode.None;
+        requestModel.BodyText = string.Empty;
+
+        var method = string.IsNullOrWhiteSpace(CorsRequestMethod)
+            ? SelectedMethod.ToString()
+            : CorsRequestMethod.Trim();
+        SetHeader(requestModel, "Access-Control-Request-Method", method);
+        if (!string.IsNullOrWhiteSpace(CorsRequestHeaders))
+            SetHeader(requestModel, "Access-Control-Request-Headers", CorsRequestHeaders.Trim());
+
+        // Preflight is a browser HTTP concept; always go through HttpService, never the raw socket.
+        await RunRequestAsync(requestModel, persistAsSaved: false, isPreflight: true,
+            corsMethod: method, forceHttp: true);
+    }
+
+    private async Task RunRequestAsync(RequestModel requestModel, bool persistAsSaved, bool isPreflight,
+        string corsMethod, bool forceHttp = false)
+    {
         ClearResponse();
         IsLoading = true;
-        StatusText = "Sending...";
+        StatusText = isPreflight ? "Sending preflight..." : "Sending...";
         _cts = new CancellationTokenSource();
 
         try
         {
-            var requestModel = BuildRequestModel();
-            var response = SelectedRequestMode == RequestMode.RawSocket
+            var response = (!forceHttp && SelectedRequestMode == RequestMode.RawSocket)
                 ? await _rawSocketService.SendAsync(requestModel, _cts.Token)
                 : await _httpService.SendAsync(requestModel, _cts.Token);
 
@@ -364,22 +415,34 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             if (response.Diagnostics != null)
                 SelectedResponseTabIndex = ConnectionTabIndex;
 
+            if (CorsEnabled)
+            {
+                CorsVerdict = CorsAnalyzer.Analyze(CorsOrigin, corsMethod, CorsRequestHeaders,
+                    CorsIncludeCredentials, isPreflight, response);
+                HasCorsVerdict = true;
+            }
+
             StatusText = $"{response.StatusCode} {response.ReasonPhrase} - {response.Duration.TotalMilliseconds:F0}ms";
 
-            var savedReq = await SaveRequestForSendAsync(requestModel);
-            _owner.AddHistoryItem(new HistoryItem
+            if (persistAsSaved)
             {
-                Timestamp = DateTime.Now,
-                Method = SelectedMethod,
-                Url = RequestUrl,
-                StatusCode = response.StatusCode,
-                Duration = response.Duration,
-                RequestSnapshot = _persistenceService.SerializeRequest(requestModel),
-                SavedRequestId = savedReq.Id,
-                SavedRequestName = savedReq.Name
-            });
+                // Persist the plain request (no injected Origin header) so saved/restored Headers stay clean.
+                var persistModel = BuildRequestModel();
+                var savedReq = await SaveRequestForSendAsync(persistModel);
+                _owner.AddHistoryItem(new HistoryItem
+                {
+                    Timestamp = DateTime.Now,
+                    Method = SelectedMethod,
+                    Url = RequestUrl,
+                    StatusCode = response.StatusCode,
+                    Duration = response.Duration,
+                    RequestSnapshot = _persistenceService.SerializeRequest(persistModel),
+                    SavedRequestId = savedReq.Id,
+                    SavedRequestName = savedReq.Name
+                });
 
-            IsDirty = false;
+                IsDirty = false;
+            }
         }
         catch (HttpRequestException ex)
         {
@@ -410,6 +473,34 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             _cts = null;
             _owner.ScheduleTabSessionSave();
         }
+    }
+
+    private bool TryPrepareUrl()
+    {
+        if (string.IsNullOrWhiteSpace(RequestUrl))
+        {
+            StatusText = "Please enter a URL";
+            return false;
+        }
+
+        var url = RequestUrl.Trim();
+        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = "https://" + url;
+            RequestUrl = url;
+        }
+
+        return true;
+    }
+
+    private bool ValidateTimeout()
+    {
+        if (IsRequestTimeoutValid())
+            return true;
+
+        StatusText = "Timeout must be between 1 and 300 seconds";
+        return false;
     }
 
     [RelayCommand]
@@ -577,8 +668,37 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             ApiKeyHeader = ApiKeyHeader,
             ApiKeyValue = ApiKeyValue,
             TimeoutSeconds = Math.Clamp(RequestTimeoutSeconds, 1, 300),
-            FollowRedirects = RequestFollowRedirects
+            FollowRedirects = RequestFollowRedirects,
+            CorsEnabled = CorsEnabled,
+            CorsOrigin = CorsOrigin,
+            CorsRequestMethod = CorsRequestMethod,
+            CorsRequestHeaders = CorsRequestHeaders,
+            CorsIncludeCredentials = CorsIncludeCredentials
         };
+    }
+
+    /// <summary>
+    /// Builds the model that is actually sent over the wire: the plain request plus the
+    /// injected CORS <c>Origin</c> header when CORS testing is enabled. The injection lives here
+    /// (not in <see cref="BuildRequestModel"/>) so saved/exported requests keep a clean Headers list.
+    /// </summary>
+    private RequestModel BuildSendModel()
+    {
+        var model = BuildRequestModel();
+
+        if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin)
+            && !model.Headers.Any(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase)))
+        {
+            model.Headers.Add(new HeaderItemData { Key = "Origin", Value = CorsOrigin.Trim(), IsEnabled = true });
+        }
+
+        return model;
+    }
+
+    private static void SetHeader(RequestModel model, string key, string value)
+    {
+        model.Headers.RemoveAll(h => h.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        model.Headers.Add(new HeaderItemData { Key = key, Value = value, IsEnabled = true });
     }
 
     private async Task<SavedRequest> SaveRequestForSendAsync(RequestModel requestModel)
@@ -651,6 +771,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             ? request.TimeoutSeconds
             : _owner.CurrentSettings.DefaultTimeoutSeconds;
         RequestFollowRedirects = request.FollowRedirects;
+        CorsEnabled = request.CorsEnabled;
+        CorsOrigin = request.CorsOrigin;
+        CorsRequestMethod = request.CorsRequestMethod;
+        CorsRequestHeaders = request.CorsRequestHeaders;
+        CorsIncludeCredentials = request.CorsIncludeCredentials;
     }
 
     private bool IsRequestTimeoutValid() => RequestTimeoutSeconds is >= 1 and <= 300;
@@ -664,6 +789,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         ConnectionDiagnostics = null;
         HasDiagnostics = false;
         TimingPhases = [];
+        CorsVerdict = null;
+        HasCorsVerdict = false;
     }
 
     private void SetDiagnostics(ConnectionDiagnostics? diagnostics)
@@ -709,6 +836,10 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
         foreach (var h in RequestHeaders.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
             sb.Append($" \\\n  -H '{h.Key}: {h.Value}'");
+
+        if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin)
+            && !RequestHeaders.Any(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase)))
+            sb.Append($" \\\n  -H 'Origin: {CorsOrigin.Trim()}'");
 
         switch (SelectedAuthMode)
         {

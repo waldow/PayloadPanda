@@ -18,6 +18,7 @@
             <converters:NullToVisibilityConverter x:Key="NullToVisibility"/>
             <converters:EnumMatchToBoolConverter x:Key="EnumMatchToBool"/>
             <converters:DiagnosticBrushConverter x:Key="DiagnosticBrush"/>
+            <converters:CorsStatusToBrushConverter x:Key="CorsStatusToBrush"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
