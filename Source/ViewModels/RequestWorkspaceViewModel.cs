@@ -95,6 +95,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         SelectedRequestMode == RequestMode.Http &&
         !CorsEnabled &&
         string.IsNullOrWhiteSpace(CorsOrigin) &&
+        string.IsNullOrWhiteSpace(CorsRequestMethod) &&
+        string.IsNullOrWhiteSpace(CorsRequestHeaders) &&
+        !CorsIncludeCredentials &&
         CurrentResponse is null &&
         !HasDiagnostics &&
         RequestHeaders.All(h => string.IsNullOrWhiteSpace(h.Key) && string.IsNullOrWhiteSpace(h.Value)) &&
@@ -360,8 +363,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         if (!TryPrepareUrl() || !ValidateTimeout())
             return;
 
-        await RunRequestAsync(BuildSendModel(), persistAsSaved: true, isPreflight: false,
-            corsMethod: SelectedMethod.ToString());
+        var requestModel = BuildSendModel();
+        await RunRequestAsync(requestModel, persistAsSaved: true, isPreflight: false,
+            corsMethod: SelectedMethod.ToString(), corsRequestedHeaders: BuildCorsRequestedHeaders(requestModel));
     }
 
     [RelayCommand]
@@ -376,25 +380,21 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         if (!TryPrepareUrl() || !ValidateTimeout())
             return;
 
-        var requestModel = BuildSendModel();
-        requestModel.Method = HttpMethodType.OPTIONS;
-        requestModel.BodyMode = BodyMode.None;
-        requestModel.BodyText = string.Empty;
-
         var method = string.IsNullOrWhiteSpace(CorsRequestMethod)
             ? SelectedMethod.ToString()
             : CorsRequestMethod.Trim();
-        SetHeader(requestModel, "Access-Control-Request-Method", method);
-        if (!string.IsNullOrWhiteSpace(CorsRequestHeaders))
-            SetHeader(requestModel, "Access-Control-Request-Headers", CorsRequestHeaders.Trim());
+
+        var baseModel = BuildRequestModel();
+        var requestedHeaders = BuildCorsRequestedHeaders(baseModel, method);
+        var requestModel = BuildPreflightModel(baseModel, method, requestedHeaders);
 
         // Preflight is a browser HTTP concept; always go through HttpService, never the raw socket.
         await RunRequestAsync(requestModel, persistAsSaved: false, isPreflight: true,
-            corsMethod: method, forceHttp: true);
+            corsMethod: method, corsRequestedHeaders: requestedHeaders, forceHttp: true);
     }
 
     private async Task RunRequestAsync(RequestModel requestModel, bool persistAsSaved, bool isPreflight,
-        string corsMethod, bool forceHttp = false)
+        string corsMethod, string corsRequestedHeaders, bool forceHttp = false)
     {
         ClearResponse();
         IsLoading = true;
@@ -417,7 +417,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
             if (CorsEnabled)
             {
-                CorsVerdict = CorsAnalyzer.Analyze(CorsOrigin, corsMethod, CorsRequestHeaders,
+                CorsVerdict = CorsAnalyzer.Analyze(GetEnabledHeaderValue(requestModel, "Origin"), corsMethod, corsRequestedHeaders,
                     CorsIncludeCredentials, isPreflight, response);
                 HasCorsVerdict = true;
             }
@@ -686,11 +686,42 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     {
         var model = BuildRequestModel();
 
-        if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin)
-            && !model.Headers.Any(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase)))
+        if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin))
+            SetHeader(model, "Origin", CorsOrigin.Trim());
+
+        return model;
+    }
+
+    private RequestModel BuildPreflightModel(RequestModel baseModel, string method, string requestedHeaders)
+    {
+        var model = new RequestModel
         {
-            model.Headers.Add(new HeaderItemData { Key = "Origin", Value = CorsOrigin.Trim(), IsEnabled = true });
-        }
+            Method = HttpMethodType.OPTIONS,
+            Url = baseModel.Url,
+            QueryParams = baseModel.QueryParams
+                .Select(p => new QueryParamData { Key = p.Key, Value = p.Value, IsEnabled = p.IsEnabled })
+                .ToList(),
+            BodyMode = BodyMode.None,
+            BodyText = string.Empty,
+            AuthMode = AuthMode.None,
+            TimeoutSeconds = baseModel.TimeoutSeconds,
+            FollowRedirects = baseModel.FollowRedirects,
+            CorsEnabled = CorsEnabled,
+            CorsOrigin = CorsOrigin,
+            CorsRequestMethod = CorsRequestMethod,
+            CorsRequestHeaders = CorsRequestHeaders,
+            CorsIncludeCredentials = CorsIncludeCredentials
+        };
+
+        var origin = !string.IsNullOrWhiteSpace(CorsOrigin)
+            ? CorsOrigin.Trim()
+            : GetEnabledHeaderValue(baseModel, "Origin");
+        if (!string.IsNullOrWhiteSpace(origin))
+            SetHeader(model, "Origin", origin);
+
+        SetHeader(model, "Access-Control-Request-Method", method);
+        if (!string.IsNullOrWhiteSpace(requestedHeaders))
+            SetHeader(model, "Access-Control-Request-Headers", requestedHeaders);
 
         return model;
     }
@@ -700,6 +731,102 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         model.Headers.RemoveAll(h => h.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
         model.Headers.Add(new HeaderItemData { Key = key, Value = value, IsEnabled = true });
     }
+
+    private static string GetEnabledHeaderValue(RequestModel model, string key)
+    {
+        return model.Headers
+            .FirstOrDefault(h => h.IsEnabled && h.Key.Equals(key, StringComparison.OrdinalIgnoreCase))
+            ?.Value.Trim() ?? string.Empty;
+    }
+
+    private string BuildCorsRequestedHeaders(RequestModel model, string? methodOverride = null)
+    {
+        if (!string.IsNullOrWhiteSpace(CorsRequestHeaders))
+            return CorsRequestHeaders.Trim();
+
+        var headers = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var header in model.Headers.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
+        {
+            if (ShouldIgnoreForPreflightHeaderList(header.Key))
+                continue;
+
+            if (!IsCorsSafelistedHeader(header.Key, header.Value))
+                headers.Add(header.Key.Trim().ToLowerInvariant());
+        }
+
+        switch (model.AuthMode)
+        {
+            case AuthMode.Bearer:
+            case AuthMode.Basic:
+                headers.Add("authorization");
+                break;
+            case AuthMode.ApiKey:
+                headers.Add((string.IsNullOrWhiteSpace(model.ApiKeyHeader) ? "X-API-Key" : model.ApiKeyHeader)
+                    .Trim()
+                    .ToLowerInvariant());
+                break;
+        }
+
+        if (RequestUsesBody(model, methodOverride) &&
+            !IsCorsSafelistedContentType(GetBodyContentType(model.BodyMode)))
+        {
+            headers.Add("content-type");
+        }
+
+        return string.Join(", ", headers);
+    }
+
+    private static bool ShouldIgnoreForPreflightHeaderList(string key)
+    {
+        key = key.Trim();
+        return key.Equals("Origin", StringComparison.OrdinalIgnoreCase) ||
+               key.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
+               key.Equals("Host", StringComparison.OrdinalIgnoreCase) ||
+               key.Equals("User-Agent", StringComparison.OrdinalIgnoreCase) ||
+               key.StartsWith("Access-Control-Request-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCorsSafelistedHeader(string key, string value)
+    {
+        key = key.Trim();
+        if (key.Equals("Accept", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("Accept-Language", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("Content-Language", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&
+               IsCorsSafelistedContentType(value);
+    }
+
+    private static bool IsCorsSafelistedContentType(string value)
+    {
+        var contentType = (value ?? string.Empty).Split(';', 2)[0].Trim();
+        return contentType.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase) ||
+               contentType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase) ||
+               contentType.Equals("text/plain", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool RequestUsesBody(RequestModel model, string? methodOverride)
+    {
+        var method = string.IsNullOrWhiteSpace(methodOverride)
+            ? model.Method.ToString()
+            : methodOverride.Trim();
+
+        return model.BodyMode != BodyMode.None &&
+               !method.Equals("GET", StringComparison.OrdinalIgnoreCase) &&
+               !method.Equals("HEAD", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetBodyContentType(BodyMode bodyMode) => bodyMode switch
+    {
+        BodyMode.Json => "application/json",
+        BodyMode.Xml => "application/xml",
+        BodyMode.FormUrlEncoded => "application/x-www-form-urlencoded",
+        BodyMode.Raw => "text/plain",
+        _ => string.Empty
+    };
 
     private async Task<SavedRequest> SaveRequestForSendAsync(RequestModel requestModel)
     {
@@ -835,10 +962,17 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         sb.Append($" '{RequestUrl}'");
 
         foreach (var h in RequestHeaders.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
-            sb.Append($" \\\n  -H '{h.Key}: {h.Value}'");
+        {
+            if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin) &&
+                h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
 
-        if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin)
-            && !RequestHeaders.Any(h => h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase)))
+            sb.Append($" \\\n  -H '{h.Key}: {h.Value}'");
+        }
+
+        if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin))
             sb.Append($" \\\n  -H 'Origin: {CorsOrigin.Trim()}'");
 
         switch (SelectedAuthMode)

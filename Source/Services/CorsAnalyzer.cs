@@ -23,6 +23,16 @@ public static class CorsAnalyzer
         origin = (origin ?? string.Empty).Trim();
         method = (method ?? string.Empty).Trim();
 
+        if (string.IsNullOrWhiteSpace(origin))
+        {
+            checks.Add(new CorsCheck
+            {
+                Label = "Origin",
+                Status = CorsCheckStatus.Fail,
+                Detail = "missing - a browser CORS request must send an Origin header."
+            });
+        }
+
         // Preflight responses are expected to be a 2xx.
         if (isPreflight)
         {
@@ -48,8 +58,7 @@ public static class CorsAnalyzer
         else
         {
             var isWildcard = allowOrigin.Trim() == "*";
-            var matchesOrigin = string.IsNullOrEmpty(origin)
-                || isWildcard
+            var matchesOrigin = isWildcard
                 || allowOrigin.Trim().Equals(origin, StringComparison.OrdinalIgnoreCase);
 
             checks.Add(new CorsCheck

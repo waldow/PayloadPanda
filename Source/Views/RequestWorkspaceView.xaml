@@ -277,7 +277,7 @@
                             <TextBox Text="{Binding CorsRequestHeaders, UpdateSourceTrigger=PropertyChanged}"
                                      FontFamily="{DynamicResource CodeFont}"
                                      Margin="0,0,0,8"
-                                     ToolTip="Comma-separated custom headers, e.g. content-type, authorization"/>
+                                     ToolTip="Comma-separated custom headers. Leave blank to derive from the current request."/>
 
                             <CheckBox Content="Include credentials (cookies / Authorization)"
                                       IsChecked="{Binding CorsIncludeCredentials}"
