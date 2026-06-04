@@ -948,7 +948,33 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
     private string GenerateCurlCommand()
     {
-        var sb = new StringBuilder("curl");
+        var style = _owner.CurrentSettings.CurlExportStyle;
+
+        // PowerShell aliases `curl` to Invoke-WebRequest, so call curl.exe explicitly there.
+        var cmd = style == CurlExportStyle.PowerShell ? "curl.exe" : "curl";
+        var sb = new StringBuilder(cmd);
+
+        var cont = style switch
+        {
+            CurlExportStyle.PowerShell => "`",
+            CurlExportStyle.Cmd => "^",
+            _ => "\\"
+        };
+        var nl = $" {cont}\n  ";
+
+        // Wrap a value as a quoted literal, escaping embedded quotes per shell:
+        // Bash uses '\'' , PowerShell doubles single quotes ('') , cmd.exe wraps in
+        // double quotes and escapes inner ones as \".
+        string Q(string? value)
+        {
+            var v = value ?? string.Empty;
+            return style switch
+            {
+                CurlExportStyle.Cmd => $"\"{v.Replace("\"", "\\\"")}\"",
+                CurlExportStyle.PowerShell => $"'{v.Replace("'", "''")}'",
+                _ => $"'{v.Replace("'", "'\\''")}'"
+            };
+        }
 
         if (SelectedMethod != HttpMethodType.GET)
             sb.Append($" -X {SelectedMethod}");
@@ -959,7 +985,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         if (IsRequestTimeoutValid())
             sb.Append($" --max-time {RequestTimeoutSeconds}");
 
-        sb.Append($" '{RequestUrl}'");
+        sb.Append($" {Q(RequestUrl)}");
 
         foreach (var h in RequestHeaders.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
         {
@@ -969,23 +995,23 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                 continue;
             }
 
-            sb.Append($" \\\n  -H '{h.Key}: {h.Value}'");
+            sb.Append($"{nl}-H {Q($"{h.Key}: {h.Value}")}");
         }
 
         if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin))
-            sb.Append($" \\\n  -H 'Origin: {CorsOrigin.Trim()}'");
+            sb.Append($"{nl}-H {Q($"Origin: {CorsOrigin.Trim()}")}");
 
         switch (SelectedAuthMode)
         {
             case AuthMode.Bearer:
-                sb.Append($" \\\n  -H 'Authorization: Bearer {AuthToken}'");
+                sb.Append($"{nl}-H {Q($"Authorization: Bearer {AuthToken}")}");
                 break;
             case AuthMode.Basic:
-                sb.Append($" \\\n  -u '{AuthUsername}:{AuthPassword}'");
+                sb.Append($"{nl}-u {Q($"{AuthUsername}:{AuthPassword}")}");
                 break;
             case AuthMode.ApiKey:
                 var key = string.IsNullOrWhiteSpace(ApiKeyHeader) ? "X-API-Key" : ApiKeyHeader;
-                sb.Append($" \\\n  -H '{key}: {ApiKeyValue}'");
+                sb.Append($"{nl}-H {Q($"{key}: {ApiKeyValue}")}");
                 break;
         }
 
@@ -998,8 +1024,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                 BodyMode.FormUrlEncoded => "application/x-www-form-urlencoded",
                 _ => "text/plain"
             };
-            sb.Append($" \\\n  -H 'Content-Type: {contentType}'");
-            sb.Append($" \\\n  -d '{RequestBody.Replace("'", "'\\''")}'");
+            sb.Append($"{nl}-H {Q($"Content-Type: {contentType}")}");
+            sb.Append($"{nl}-d {Q(RequestBody)}");
         }
 
         return sb.ToString();

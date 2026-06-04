@@ -27,6 +27,7 @@ public partial class SettingsWindow : Window
         SslVerificationBox.IsChecked = _settings.SslCertificateVerification;
         FontSizeBox.Text = _settings.EditorFontSize.ToString();
         WordWrapBox.IsChecked = _settings.EditorWordWrap;
+        CurlStyleBox.SelectedIndex = (int)_settings.CurlExportStyle;
         ApiKeyBox.Password = _settings.OpenAiApiKey ?? string.Empty;
         AiEndpointBox.Text = _settings.AiEndpoint;
         AiModelBox.SelectedItem = _settings.AiDefaultModel;
@@ -94,6 +95,7 @@ public partial class SettingsWindow : Window
         _settings.SslCertificateVerification = SslVerificationBox.IsChecked == true;
         _settings.EditorFontSize = fontSize;
         _settings.EditorWordWrap = WordWrapBox.IsChecked == true;
+        _settings.CurlExportStyle = (CurlExportStyle)Math.Max(0, CurlStyleBox.SelectedIndex);
         _settings.OpenAiApiKey = string.IsNullOrWhiteSpace(ApiKeyBox.Password) ? null : ApiKeyBox.Password;
         _settings.AiEndpoint = string.IsNullOrWhiteSpace(AiEndpointBox.Text)
             ? "https://api.openai.com/v1/chat/completions"
@@ -135,6 +137,7 @@ public partial class SettingsWindow : Window
         SslVerificationBox.IsChecked = defaults.SslCertificateVerification;
         FontSizeBox.Text = defaults.EditorFontSize.ToString();
         WordWrapBox.IsChecked = defaults.EditorWordWrap;
+        CurlStyleBox.SelectedIndex = (int)defaults.CurlExportStyle;
         ApiKeyBox.Password = string.Empty;
         AiEndpointBox.Text = defaults.AiEndpoint;
         AiModelBox.SelectedItem = defaults.AiDefaultModel;

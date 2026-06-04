@@ -99,6 +99,22 @@
 
                     <Separator Margin="0,0,0,12"/>
 
+                    <!-- ==================== EXPORT ==================== -->
+                    <TextBlock Text="EXPORT" FontSize="11" FontWeight="Bold"
+                               Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
+
+                    <Label Content="Copy as cURL style"/>
+                    <ComboBox x:Name="CurlStyleBox" Width="320" HorizontalAlignment="Left" Margin="0,0,0,4">
+                        <ComboBoxItem Content="Bash  —  curl, \ line breaks (Linux / macOS)"/>
+                        <ComboBoxItem Content="PowerShell  —  curl.exe, ` line breaks (Windows)"/>
+                        <ComboBoxItem Content="cmd.exe  —  curl, ^ line breaks (Windows)"/>
+                    </ComboBox>
+                    <TextBlock Text="Sets the command, line-continuation character and quote escaping for the target shell"
+                               FontSize="10" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextMuted}" Margin="0,0,0,16"/>
+
+                    <Separator Margin="0,0,0,12"/>
+
                     <!-- ==================== AI IMPORT ==================== -->
                     <TextBlock Text="AI IMPORT" FontSize="11" FontWeight="Bold"
                                Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>

@@ -42,3 +42,10 @@ public enum RequestPhase
     SendRequest,
     ReadResponse
 }
+
+public enum CurlExportStyle
+{
+    Bash,       // curl, \ continuation, '\'' escaping (Linux / macOS / Git Bash)
+    PowerShell, // curl.exe, ` continuation, '' escaping (Windows PowerShell)
+    Cmd         // curl, ^ continuation, "..." with \" escaping (Windows cmd.exe)
+}

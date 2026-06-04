@@ -15,6 +15,9 @@ public class SettingsModel
     public int EditorFontSize { get; set; } = 13;
     public bool EditorWordWrap { get; set; } = true;
 
+    // Export
+    public CurlExportStyle CurlExportStyle { get; set; } = CurlExportStyle.Bash;
+
     // AI Import
     public string? OpenAiApiKey { get; set; }
     public string AiEndpoint { get; set; } = "https://api.openai.com/v1/chat/completions";
@@ -32,6 +35,7 @@ public class SettingsModel
             SslCertificateVerification = SslCertificateVerification,
             EditorFontSize = EditorFontSize,
             EditorWordWrap = EditorWordWrap,
+            CurlExportStyle = CurlExportStyle,
             OpenAiApiKey = OpenAiApiKey,
             AiEndpoint = AiEndpoint,
             AiDefaultModel = AiDefaultModel,
