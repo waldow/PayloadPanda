@@ -48,7 +48,7 @@ public class SavedRequestService
         request.ModifiedAt = DateTime.Now;
         var filePath = Path.Combine(RequestsFolder, $"{request.Id}.json");
         var json = JsonSerializer.Serialize(BuildEncryptedCopy(request), JsonOptions);
-        await File.WriteAllTextAsync(filePath, json);
+        await AtomicFile.WriteAllTextAsync(filePath, json);
     }
 
     public async Task<List<SavedRequest>> LoadAllAsync()
@@ -64,8 +64,9 @@ public class SavedRequestService
             {
                 var json = await File.ReadAllTextAsync(file);
                 var request = JsonSerializer.Deserialize<SavedRequest>(json, ReadOptions);
-                if (request != null)
+                if (request?.Request != null)
                 {
+                    request.Request.Normalize();
                     RequestSecrets.UnprotectInPlace(request.Request);
                     results.Add(request);
                 }
@@ -91,7 +92,7 @@ public class SavedRequestService
     public async Task SaveAutosaveAsync(SavedRequest request)
     {
         var json = JsonSerializer.Serialize(BuildEncryptedCopy(request), JsonOptions);
-        await File.WriteAllTextAsync(AutosaveFilePath, json);
+        await AtomicFile.WriteAllTextAsync(AutosaveFilePath, json);
     }
 
     public async Task<SavedRequest?> LoadAutosaveAsync()
@@ -103,8 +104,11 @@ public class SavedRequestService
         {
             var json = await File.ReadAllTextAsync(AutosaveFilePath);
             var request = JsonSerializer.Deserialize<SavedRequest>(json, ReadOptions);
-            if (request != null)
-                RequestSecrets.UnprotectInPlace(request.Request);
+            if (request?.Request is null)
+                return null;
+
+            request.Request.Normalize();
+            RequestSecrets.UnprotectInPlace(request.Request);
             return request;
         }
         catch
@@ -115,8 +119,16 @@ public class SavedRequestService
 
     public void ClearAutosave()
     {
-        if (File.Exists(AutosaveFilePath))
-            File.Delete(AutosaveFilePath);
+        try
+        {
+            if (File.Exists(AutosaveFilePath))
+                File.Delete(AutosaveFilePath);
+        }
+        catch (IOException)
+        {
+            // A locked autosave file is harmless — it is overwritten on the next save
+            // and must never abort the startup tab restore that calls this.
+        }
     }
 
     // Returns a shallow-cloned SavedRequest whose inner Request has DPAPI-protected

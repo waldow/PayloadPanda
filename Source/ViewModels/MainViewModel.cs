@@ -193,11 +193,19 @@ public partial class MainViewModel : ObservableObject
 
         if (dialog.ShowDialog() == true)
         {
-            var request = await _persistenceService.LoadRequestAsync(dialog.FileName);
-            if (request != null)
+            try
             {
-                var tab = GetSmartOpenTarget();
-                tab.LoadRequestDraft(request, $"Imported {System.IO.Path.GetFileName(dialog.FileName)}", isDirty: true);
+                var request = await _persistenceService.LoadRequestAsync(dialog.FileName);
+                if (request != null)
+                {
+                    var tab = GetSmartOpenTarget();
+                    tab.LoadRequestDraft(request, $"Imported {System.IO.Path.GetFileName(dialog.FileName)}", isDirty: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Could not import request: {ex.Message}", "Import Request",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
     }
@@ -219,7 +227,14 @@ public partial class MainViewModel : ObservableObject
     private async Task ClearHistoryAsync()
     {
         HistoryItems.Clear();
-        await _persistenceService.SaveHistoryAsync([]);
+        try
+        {
+            await _persistenceService.SaveHistoryAsync([]);
+        }
+        catch
+        {
+            // History persistence is best-effort; the in-memory list is already cleared.
+        }
     }
 
     [RelayCommand]
@@ -275,7 +290,7 @@ public partial class MainViewModel : ObservableObject
         {
             saved.Name = dialog.NewName;
             saved.ModifiedAt = DateTime.Now;
-            await _savedRequestService.SaveAsync(saved);
+            await TrySaveRequestFileAsync(saved);
 
             foreach (var tab in Tabs)
                 tab.RenameSavedRequestLink(saved.Id, saved.Name);
@@ -295,7 +310,17 @@ public partial class MainViewModel : ObservableObject
         if (saved is null)
             return;
 
-        _savedRequestService.Delete(saved.Id);
+        try
+        {
+            _savedRequestService.Delete(saved.Id);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not delete \"{saved.Name}\": {ex.Message}", "Delete Request",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         SavedRequests.Remove(saved);
 
         foreach (var tab in Tabs)
@@ -315,7 +340,20 @@ public partial class MainViewModel : ObservableObject
         };
 
         SavedRequests.Insert(0, duplicate);
-        await _savedRequestService.SaveAsync(duplicate);
+        await TrySaveRequestFileAsync(duplicate);
+    }
+
+    private async Task TrySaveRequestFileAsync(SavedRequest saved)
+    {
+        try
+        {
+            await _savedRequestService.SaveAsync(saved);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Could not save \"{saved.Name}\": {ex.Message}", "Save Request",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     [RelayCommand]
@@ -405,7 +443,7 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void OpenSettings()
+    private async Task OpenSettingsAsync()
     {
         var editCopy = _settings.Clone();
         var dialog = new PayloadPanda.Views.SettingsWindow(editCopy, _aiImportService.AvailableModels)
@@ -417,7 +455,15 @@ public partial class MainViewModel : ObservableObject
         {
             _settings = editCopy;
             ApplySettings();
-            _ = _persistenceService.SaveSettingsAsync(_settings);
+            try
+            {
+                await _persistenceService.SaveSettingsAsync(_settings);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Settings applied but could not be saved to disk: {ex.Message}",
+                    "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
     }
 
@@ -446,9 +492,29 @@ public partial class MainViewModel : ObservableObject
 
     public async Task RestoreTabsFromDiskAsync()
     {
-        var session = await _tabSessionService.LoadAsync();
-
         _suppressTabSessionSave = true;
+        try
+        {
+            await RestoreTabsCoreAsync();
+        }
+        catch
+        {
+            // A bad session/autosave file must never block startup; the finally
+            // block guarantees the window opens with at least one usable tab.
+        }
+        finally
+        {
+            if (Tabs.Count == 0)
+                AddBlankTab(select: true);
+            _suppressTabSessionSave = false;
+        }
+
+        ScheduleTabSessionSave();
+    }
+
+    private async Task RestoreTabsCoreAsync()
+    {
+        var session = await _tabSessionService.LoadAsync();
         Tabs.Clear();
 
         if (session?.Tabs.Count > 0)
@@ -496,12 +562,6 @@ public partial class MainViewModel : ObservableObject
                 AddBlankTab(select: true);
             }
         }
-
-        if (Tabs.Count == 0)
-            AddBlankTab(select: true);
-
-        _suppressTabSessionSave = false;
-        ScheduleTabSessionSave();
     }
 
     public async Task SaveTabsSessionNowAsync()
@@ -541,7 +601,20 @@ public partial class MainViewModel : ObservableObject
     {
         HistoryItems.Insert(0, item);
         TrimHistory();
-        _ = _persistenceService.SaveHistoryAsync(HistoryItems.ToList());
+        _ = PersistHistoryAsync(HistoryItems.ToList());
+    }
+
+    private async Task PersistHistoryAsync(List<HistoryItem> snapshot)
+    {
+        try
+        {
+            await _persistenceService.SaveHistoryAsync(snapshot);
+        }
+        catch
+        {
+            // History persistence is best-effort and runs fire-and-forget after every
+            // send — a failed write must never surface as an unobserved exception.
+        }
     }
 
     internal void MoveSavedRequestToTop(SavedRequest saved)

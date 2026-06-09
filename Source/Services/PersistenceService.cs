@@ -19,6 +19,10 @@ public class PersistenceService
 
     private string? _customHistoryFilePath;
 
+    // AddHistoryItem persists fire-and-forget after every send; serialize the
+    // writes so rapid sends don't collide on the same file.
+    private readonly SemaphoreSlim _historyWriteLock = new(1, 1);
+
     private static string AppDataFolder
     {
         get
@@ -57,7 +61,7 @@ public class PersistenceService
         var forDisk = settings.Clone();
         forDisk.OpenAiApiKey = SecretProtector.Protect(forDisk.OpenAiApiKey);
         var json = JsonSerializer.Serialize(forDisk, JsonOptions);
-        await File.WriteAllTextAsync(SettingsFilePath, json);
+        await AtomicFile.WriteAllTextAsync(SettingsFilePath, json);
     }
 
     public async Task<SettingsModel> LoadSettingsAsync()
@@ -83,7 +87,7 @@ public class PersistenceService
     public async Task SaveRequestAsync(RequestModel request, string filePath)
     {
         var json = JsonSerializer.Serialize(request, JsonOptions);
-        await File.WriteAllTextAsync(filePath, json);
+        await AtomicFile.WriteAllTextAsync(filePath, json);
     }
 
     public async Task<RequestModel?> LoadRequestAsync(string filePath)
@@ -92,7 +96,9 @@ public class PersistenceService
             return null;
 
         var json = await File.ReadAllTextAsync(filePath);
-        return JsonSerializer.Deserialize<RequestModel>(json, ReadOptions);
+        var request = JsonSerializer.Deserialize<RequestModel>(json, ReadOptions);
+        request?.Normalize();
+        return request;
     }
 
     // ==================== History ====================
@@ -100,7 +106,15 @@ public class PersistenceService
     public async Task SaveHistoryAsync(List<HistoryItem> history)
     {
         var json = JsonSerializer.Serialize(history, JsonOptions);
-        await File.WriteAllTextAsync(EffectiveHistoryFilePath, json);
+        await _historyWriteLock.WaitAsync();
+        try
+        {
+            await AtomicFile.WriteAllTextAsync(EffectiveHistoryFilePath, json);
+        }
+        finally
+        {
+            _historyWriteLock.Release();
+        }
     }
 
     public async Task<List<HistoryItem>> LoadHistoryAsync()
@@ -108,8 +122,18 @@ public class PersistenceService
         if (!File.Exists(EffectiveHistoryFilePath))
             return [];
 
-        var json = await File.ReadAllTextAsync(EffectiveHistoryFilePath);
-        return JsonSerializer.Deserialize<List<HistoryItem>>(json, ReadOptions) ?? [];
+        try
+        {
+            var json = await File.ReadAllTextAsync(EffectiveHistoryFilePath);
+            var items = JsonSerializer.Deserialize<List<HistoryItem>>(json, ReadOptions) ?? [];
+            items.RemoveAll(i => i is null);
+            return items;
+        }
+        catch
+        {
+            // A corrupt or unreadable history file must never block startup.
+            return [];
+        }
     }
 
     // ==================== Serialization Helpers ====================
@@ -126,10 +150,19 @@ public class PersistenceService
 
     public RequestModel? DeserializeRequest(string json)
     {
-        var request = JsonSerializer.Deserialize<RequestModel>(json, ReadOptions);
-        if (request is null) return null;
+        try
+        {
+            var request = JsonSerializer.Deserialize<RequestModel>(json, ReadOptions);
+            if (request is null) return null;
 
-        RequestSecrets.UnprotectInPlace(request);
-        return request;
+            request.Normalize();
+            RequestSecrets.UnprotectInPlace(request);
+            return request;
+        }
+        catch (JsonException)
+        {
+            // Malformed history snapshots load as "nothing" instead of crashing.
+            return null;
+        }
     }
 }

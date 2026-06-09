@@ -17,9 +17,28 @@ public partial class App : Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
-        await MainViewModel.LoadSettingsFromDiskAsync();
-        await MainViewModel.LoadHistoryFromDiskAsync();
-        await MainViewModel.LoadSavedRequestsFromDiskAsync();
+
+        // Last-resort handlers: surface the error instead of tearing the app down.
+        DispatcherUnhandledException += (_, args) =>
+        {
+            MessageBox.Show($"Unexpected error: {args.Exception.Message}",
+                "PayloadPanda", MessageBoxButton.OK, MessageBoxImage.Error);
+            args.Handled = true;
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) => args.SetObserved();
+
+        try
+        {
+            await MainViewModel.LoadSettingsFromDiskAsync();
+            await MainViewModel.LoadHistoryFromDiskAsync();
+            await MainViewModel.LoadSavedRequestsFromDiskAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to load saved data: {ex.Message}\n\nStarting with defaults.",
+                "PayloadPanda", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
         await MainViewModel.RestoreTabsFromDiskAsync();
     }
 

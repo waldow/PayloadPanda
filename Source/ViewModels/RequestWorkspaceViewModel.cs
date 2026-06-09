@@ -396,16 +396,25 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     private async Task RunRequestAsync(RequestModel requestModel, bool persistAsSaved, bool isPreflight,
         string corsMethod, string corsRequestedHeaders, bool forceHttp = false)
     {
+        // Send and Preflight are separate commands; without this guard they could
+        // run concurrently and clobber each other's cancellation token.
+        if (IsLoading)
+        {
+            StatusText = "A request is already running";
+            return;
+        }
+
         ClearResponse();
         IsLoading = true;
         StatusText = isPreflight ? "Sending preflight..." : "Sending...";
-        _cts = new CancellationTokenSource();
+        var cts = new CancellationTokenSource();
+        _cts = cts;
 
         try
         {
             var response = (!forceHttp && SelectedRequestMode == RequestMode.RawSocket)
-                ? await _rawSocketService.SendAsync(requestModel, _cts.Token)
-                : await _httpService.SendAsync(requestModel, _cts.Token);
+                ? await _rawSocketService.SendAsync(requestModel, cts.Token)
+                : await _httpService.SendAsync(requestModel, cts.Token);
 
             CurrentResponse = response;
             RawResponseBody = response.Body;
@@ -426,22 +435,30 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
             if (persistAsSaved)
             {
-                // Persist the plain request (no injected Origin header) so saved/restored Headers stay clean.
-                var persistModel = BuildRequestModel();
-                var savedReq = await SaveRequestForSendAsync(persistModel);
-                _owner.AddHistoryItem(new HistoryItem
+                // Isolated so a disk failure here can't discard the response we already have.
+                try
                 {
-                    Timestamp = DateTime.Now,
-                    Method = SelectedMethod,
-                    Url = RequestUrl,
-                    StatusCode = response.StatusCode,
-                    Duration = response.Duration,
-                    RequestSnapshot = _persistenceService.SerializeRequest(persistModel),
-                    SavedRequestId = savedReq.Id,
-                    SavedRequestName = savedReq.Name
-                });
+                    // Persist the plain request (no injected Origin header) so saved/restored Headers stay clean.
+                    var persistModel = BuildRequestModel();
+                    var savedReq = await SaveRequestForSendAsync(persistModel);
+                    _owner.AddHistoryItem(new HistoryItem
+                    {
+                        Timestamp = DateTime.Now,
+                        Method = SelectedMethod,
+                        Url = RequestUrl,
+                        StatusCode = response.StatusCode,
+                        Duration = response.Duration,
+                        RequestSnapshot = _persistenceService.SerializeRequest(persistModel),
+                        SavedRequestId = savedReq.Id,
+                        SavedRequestName = savedReq.Name
+                    });
 
-                IsDirty = false;
+                    IsDirty = false;
+                }
+                catch
+                {
+                    StatusText += " (failed to save to library)";
+                }
             }
         }
         catch (HttpRequestException ex)
@@ -451,7 +468,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         }
         catch (OperationCanceledException)
         {
-            StatusText = _cts?.IsCancellationRequested == true ? "Request cancelled" : "Request timed out";
+            StatusText = cts.IsCancellationRequested ? "Request cancelled" : "Request timed out";
             ClearResponse();
         }
         catch (RawSocketException ex)
@@ -469,8 +486,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         finally
         {
             IsLoading = false;
-            _cts?.Dispose();
             _cts = null;
+            cts.Dispose();
             _owner.ScheduleTabSessionSave();
         }
     }
@@ -488,9 +505,15 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
             url = "https://" + url;
-            RequestUrl = url;
         }
 
+        if (!Uri.TryCreate(url, UriKind.Absolute, out _))
+        {
+            StatusText = "Invalid URL";
+            return false;
+        }
+
+        RequestUrl = url;
         return true;
     }
 
@@ -506,7 +529,14 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     [RelayCommand]
     private void Cancel()
     {
-        _cts?.Cancel();
+        try
+        {
+            _cts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The request finished between the null check and the cancel; nothing to do.
+        }
         StatusText = "Cancelling...";
     }
 
@@ -522,19 +552,39 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
         if (dialog.ShowDialog() == true)
         {
-            var request = BuildRequestModel();
-            await _persistenceService.SaveRequestAsync(request, dialog.FileName);
-            StatusText = $"Exported to {Path.GetFileName(dialog.FileName)}";
+            try
+            {
+                var request = BuildRequestModel();
+                await _persistenceService.SaveRequestAsync(request, dialog.FileName);
+                StatusText = $"Exported to {Path.GetFileName(dialog.FileName)}";
+            }
+            catch (Exception ex)
+            {
+                StatusText = $"Export failed: {ex.Message}";
+            }
         }
     }
 
     [RelayCommand]
     private void CopyResponseBody()
     {
-        if (!string.IsNullOrEmpty(ResponseBody))
-        {
-            Clipboard.SetText(ResponseBody);
+        if (!string.IsNullOrEmpty(ResponseBody) && TrySetClipboard(ResponseBody))
             StatusText = "Response copied to clipboard";
+    }
+
+    // Clipboard.SetText throws (CLIPBRD_E_CANT_OPEN) when another process holds
+    // the clipboard open — a transient condition that must not crash the app.
+    private bool TrySetClipboard(string text)
+    {
+        try
+        {
+            Clipboard.SetText(text);
+            return true;
+        }
+        catch (Exception)
+        {
+            StatusText = "Could not access the clipboard — try again";
+            return false;
         }
     }
 
@@ -576,47 +626,51 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     public void CopyAsCurl()
     {
         var curl = GenerateCurlCommand();
-        if (!string.IsNullOrEmpty(curl))
-        {
-            Clipboard.SetText(curl);
+        if (!string.IsNullOrEmpty(curl) && TrySetClipboard(curl))
             StatusText = "Curl command copied to clipboard";
-        }
     }
 
     [RelayCommand]
     public async Task SaveCurrentRequestAsync()
     {
-        var requestModel = BuildRequestModel();
-
-        if (ActiveSavedRequestId.HasValue)
+        try
         {
-            var existing = _owner.SavedRequests.FirstOrDefault(r => r.Id == ActiveSavedRequestId.Value);
-            if (existing != null)
+            var requestModel = BuildRequestModel();
+
+            if (ActiveSavedRequestId.HasValue)
             {
-                existing.Request = requestModel;
-                existing.ModifiedAt = DateTime.Now;
-                await _savedRequestService.SaveAsync(existing);
-                _owner.MoveSavedRequestToTop(existing);
-                ActiveRequestName = existing.Name;
-                IsDirty = false;
-                StatusText = $"Saved \"{existing.Name}\"";
-                return;
+                var existing = _owner.SavedRequests.FirstOrDefault(r => r.Id == ActiveSavedRequestId.Value);
+                if (existing != null)
+                {
+                    existing.Request = requestModel;
+                    existing.ModifiedAt = DateTime.Now;
+                    await _savedRequestService.SaveAsync(existing);
+                    _owner.MoveSavedRequestToTop(existing);
+                    ActiveRequestName = existing.Name;
+                    IsDirty = false;
+                    StatusText = $"Saved \"{existing.Name}\"";
+                    return;
+                }
             }
+
+            var name = string.IsNullOrWhiteSpace(RequestUrl) ? "New Request" : $"{SelectedMethod} {RequestUrl}";
+            var saved = new SavedRequest
+            {
+                Name = name,
+                Request = requestModel
+            };
+
+            ActiveSavedRequestId = saved.Id;
+            ActiveRequestName = saved.Name;
+            _owner.SavedRequests.Insert(0, saved);
+            await _savedRequestService.SaveAsync(saved);
+            IsDirty = false;
+            StatusText = $"Saved \"{saved.Name}\"";
         }
-
-        var name = string.IsNullOrWhiteSpace(RequestUrl) ? "New Request" : $"{SelectedMethod} {RequestUrl}";
-        var saved = new SavedRequest
+        catch (Exception ex)
         {
-            Name = name,
-            Request = requestModel
-        };
-
-        ActiveSavedRequestId = saved.Id;
-        ActiveRequestName = saved.Name;
-        _owner.SavedRequests.Insert(0, saved);
-        await _savedRequestService.SaveAsync(saved);
-        IsDirty = false;
-        StatusText = $"Saved \"{saved.Name}\"";
+            StatusText = $"Save failed: {ex.Message}";
+        }
     }
 
     [RelayCommand]

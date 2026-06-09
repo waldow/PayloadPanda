@@ -25,10 +25,12 @@ public class AiImportService
         if (!string.IsNullOrWhiteSpace(endpoint))
             _endpoint = endpoint;
 
+        var previous = _httpClient;
         _httpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 60)
         };
+        previous.Dispose();
     }
 
     public string[] AvailableModels { get; } = ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-5.2", "gpt-5.4-nano", "gpt-5.4-mini"];
@@ -85,6 +87,12 @@ public class AiImportService
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InvalidOperationException("API key not found. Set it in Settings or the OPENAI_API_KEY environment variable.");
 
+        if (!Uri.TryCreate(_endpoint, UriKind.Absolute, out var endpointUri) ||
+            (endpointUri.Scheme != Uri.UriSchemeHttp && endpointUri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new InvalidOperationException("AI endpoint is not a valid http(s) URL. Check Settings.");
+        }
+
         var warnings = new List<string>();
 
         if (input.Length > MaxInputLength)
@@ -105,7 +113,7 @@ public class AiImportService
         };
 
         var json = JsonSerializer.Serialize(requestBody, s_requestJsonOptions);
-        using var request = new HttpRequestMessage(HttpMethod.Post, _endpoint);
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpointUri);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -123,6 +131,8 @@ public class AiImportService
         {
             var statusCode = (int)response.StatusCode;
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (errorBody.Length > 500)
+                errorBody = errorBody[..500] + "…";
 
             throw statusCode switch
             {
@@ -206,7 +216,8 @@ public class AiImportService
         if (dto.Headers is { Count: > 0 })
         {
             request.Headers = dto.Headers
-                .Select(h => new HeaderItemData { Key = h.Key, Value = h.Value, IsEnabled = true })
+                .Where(h => h is not null)
+                .Select(h => new HeaderItemData { Key = h.Key ?? string.Empty, Value = h.Value ?? string.Empty, IsEnabled = true })
                 .ToList();
         }
 
@@ -214,10 +225,12 @@ public class AiImportService
         if (dto.QueryParams is { Count: > 0 })
         {
             request.QueryParams = dto.QueryParams
-                .Select(p => new QueryParamData { Key = p.Key, Value = p.Value, IsEnabled = true })
+                .Where(p => p is not null)
+                .Select(p => new QueryParamData { Key = p.Key ?? string.Empty, Value = p.Value ?? string.Empty, IsEnabled = true })
                 .ToList();
         }
 
+        request.Normalize();
         return request;
     }
 }

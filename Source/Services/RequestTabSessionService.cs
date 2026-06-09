@@ -50,7 +50,7 @@ public class RequestTabSessionService
         };
 
         var json = JsonSerializer.Serialize(encrypted, JsonOptions);
-        await File.WriteAllTextAsync(SessionFilePath, json).ConfigureAwait(false);
+        await AtomicFile.WriteAllTextAsync(SessionFilePath, json).ConfigureAwait(false);
     }
 
     public async Task<RequestTabSession?> LoadAsync()
@@ -65,8 +65,13 @@ public class RequestTabSessionService
             if (session is null)
                 return null;
 
+            session.Tabs ??= [];
+            session.Tabs.RemoveAll(tab => tab?.Request is null);
             foreach (var tab in session.Tabs)
+            {
+                tab.Request.Normalize();
                 RequestSecrets.UnprotectInPlace(tab.Request);
+            }
 
             return session;
         }

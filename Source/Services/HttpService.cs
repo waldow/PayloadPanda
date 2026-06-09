@@ -11,23 +11,41 @@ public class HttpService
 {
     public bool SslVerification { get; set; } = true;
 
+    // One client per (sslVerification, followRedirects) combination, reused across
+    // requests so connections are pooled instead of exhausting sockets with a new
+    // HttpClient per send. Timeouts are applied per request via a linked token.
+    private readonly Dictionary<(bool Ssl, bool Redirects), HttpClient> _clients = [];
+    private readonly object _clientsLock = new();
+
+    private HttpClient GetClient(bool followRedirects)
+    {
+        var key = (Ssl: SslVerification, Redirects: followRedirects);
+        lock (_clientsLock)
+        {
+            if (_clients.TryGetValue(key, out var existing))
+                return existing;
+
+            var handler = new SocketsHttpHandler
+            {
+                AllowAutoRedirect = key.Redirects,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+            };
+            if (!key.Ssl)
+                handler.SslOptions.RemoteCertificateValidationCallback = (_, _, _, _) => true;
+
+            var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+            _clients[key] = client;
+            return client;
+        }
+    }
+
     public async Task<ResponseModel> SendAsync(RequestModel request, CancellationToken ct)
     {
-        var handler = new HttpClientHandler
-        {
-            AllowAutoRedirect = request.FollowRedirects
-        };
+        var client = GetClient(request.FollowRedirects);
 
-        if (!SslVerification)
-        {
-            handler.ServerCertificateCustomValidationCallback =
-                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator;
-        }
-
-        using var client = new HttpClient(handler)
-        {
-            Timeout = TimeSpan.FromSeconds(request.TimeoutSeconds)
-        };
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds, 1, 300)));
+        var token = timeoutCts.Token;
 
         var url = BuildUrl(request);
         var method = request.Method switch
@@ -88,10 +106,10 @@ public class HttpService
         }
 
         var sw = Stopwatch.StartNew();
-        using var httpResponse = await client.SendAsync(httpRequest, ct);
+        using var httpResponse = await client.SendAsync(httpRequest, token);
         sw.Stop();
 
-        var bodyBytes = await httpResponse.Content.ReadAsByteArrayAsync(ct);
+        var bodyBytes = await httpResponse.Content.ReadAsByteArrayAsync(token);
         var bodyText = Encoding.UTF8.GetString(bodyBytes);
 
         var responseHeaders = new Dictionary<string, string>();
