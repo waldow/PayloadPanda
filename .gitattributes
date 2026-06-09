@@ -1,0 +1,10 @@
+# Normalize line endings: text files are stored with LF in the repository,
+# so CRLF working copies on Windows no longer show as modified.
+* text=auto
+
+# Visual Studio solution files require CRLF
+*.sln text eol=crlf
+
+# Binary assets
+*.ico binary
+*.png binary
