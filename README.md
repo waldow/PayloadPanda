@@ -5,7 +5,7 @@
   <p>Feed it URLs, headers, bodies, and cURL. PayloadPanda pads through the request jungle, sends the payload, and brings the response back neatly groomed.</p>
 </div>
 
-Postman-lite, built natively in WPF on .NET 9 — no Electron, no account, no cloud sync. Local JSON files all the way down.
+Postman-lite, built natively in WPF on .NET 10 — no Electron, no account, no cloud sync. Local JSON files all the way down.
 
 ## Panda magic
 
@@ -101,8 +101,8 @@ Built for the curious and the stuck:
 
 | Area | Choice |
 | --- | --- |
-| Runtime | .NET 9 (`net9.0-windows`), WPF |
-| Language | C# 13, nullable reference types, implicit usings |
+| Runtime | .NET 10 LTS (`net10.0-windows`), WPF |
+| Language | C# 14, nullable reference types, implicit usings |
 | MVVM | [CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet) (`ObservableObject`, `[ObservableProperty]`, `[RelayCommand]`) |
 | Code editor | [AvalonEdit](https://github.com/icsharpcode/AvalonEdit) |
 | HTTP | `System.Net.Http.HttpClient` with `CancellationToken` |
@@ -117,8 +117,8 @@ No external services, no telemetry, no database.
 
 ### Prerequisites
 - Windows 10/11
-- [.NET 9 SDK](https://dotnet.microsoft.com/download)
-- Visual Studio 2022 (17.14+) **or** the `dotnet` CLI
+- [.NET 10 SDK](https://dotnet.microsoft.com/download)
+- Visual Studio 2026 (18.0+) **or** the `dotnet` CLI
 
 ### Build & run
 
@@ -130,7 +130,7 @@ dotnet run                 # Launch the app
 dotnet test PayloadPanda.Tests/PayloadPanda.Tests.csproj   # Run the tests
 ```
 
-The test project compiles the app's `Models/` and `Services/` directly and targets plain `net9.0`, so the tests also run on Linux/macOS.
+The test project compiles the app's `Models/` and `Services/` directly and targets plain `net10.0`, so the tests also run on Linux/macOS.
 
 Or open `Source\PayloadPanda.sln` in Visual Studio and press F5.
 
