@@ -25,7 +25,8 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
-    <!-- Same versions as the app, for the linked sources. -->
+    <!-- For the linked sources. The app gets ProtectedData from the Windows Desktop runtime;
+         this project targets plain net10.0, so it needs the package. -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
   </ItemGroup>
