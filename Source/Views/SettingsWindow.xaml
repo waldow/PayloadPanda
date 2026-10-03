@@ -104,10 +104,12 @@
                                Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
 
                     <Label Content="Copy as cURL style"/>
-                    <ComboBox x:Name="CurlStyleBox" Width="320" HorizontalAlignment="Left" Margin="0,0,0,4">
-                        <ComboBoxItem Content="Bash  —  curl, \ line breaks (Linux / macOS)"/>
-                        <ComboBoxItem Content="PowerShell  —  curl.exe, ` line breaks (Windows)"/>
-                        <ComboBoxItem Content="cmd.exe  —  curl, ^ line breaks (Windows)"/>
+                    <!-- Tag = CurlExportStyle member name; items can be ordered freely. -->
+                    <ComboBox x:Name="CurlStyleBox" Width="360" HorizontalAlignment="Left" Margin="0,0,0,4">
+                        <ComboBoxItem Tag="Bash" Content="Bash  —  curl, \ line breaks (Linux / macOS / Git Bash)"/>
+                        <ComboBoxItem Tag="PowerShell" Content="PowerShell 7.3+  —  curl.exe, ` line breaks"/>
+                        <ComboBoxItem Tag="WindowsPowerShell" Content="Windows PowerShell 5.1  —  curl.exe, ` line breaks"/>
+                        <ComboBoxItem Tag="Cmd" Content="cmd.exe  —  curl, ^ line breaks (Windows)"/>
                     </ComboBox>
                     <TextBlock Text="Sets the command, line-continuation character and quote escaping for the target shell"
                                FontSize="10" TextWrapping="Wrap"
@@ -119,9 +121,9 @@
                     <TextBlock Text="AI IMPORT" FontSize="11" FontWeight="Bold"
                                Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,8"/>
 
-                    <Label Content="OpenAI API Key"/>
+                    <Label Content="API Key"/>
                     <PasswordBox x:Name="ApiKeyBox" Margin="0,0,0,4"/>
-                    <TextBlock Text="Falls back to OPENAI_API_KEY env var" FontSize="10"
+                    <TextBlock Text="Falls back to the OPENAI_API_KEY env var (only sent to api.openai.com)" FontSize="10"
                                Foreground="{DynamicResource TextMuted}" Margin="0,0,0,8"/>
 
                     <Label Content="API Endpoint"/>

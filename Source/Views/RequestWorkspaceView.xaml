@@ -417,16 +417,19 @@
                 </TabItem>
 
                 <TabItem Header="Raw">
-                    <TextBox Text="{Binding RawResponseBody, Mode=OneWay}"
-                             IsReadOnly="True"
-                             TextWrapping="Wrap"
-                             VerticalScrollBarVisibility="Auto"
-                             HorizontalScrollBarVisibility="Auto"
-                             FontFamily="{DynamicResource CodeFont}"
-                             FontSize="{Binding EditorFontSize}"
-                             Background="{DynamicResource BgInput}"
-                             BorderThickness="0"
-                             Padding="8"/>
+                    <!-- AvalonEdit rather than TextBox: it virtualizes lines, so a large body
+                         doesn't freeze the UI. Text is set from code-behind. -->
+                    <avalonedit:TextEditor
+                        x:Name="ResponseRawEditor"
+                        FontFamily="{DynamicResource CodeFont}"
+                        FontSize="{Binding EditorFontSize}"
+                        Background="{DynamicResource BgInput}"
+                        Foreground="{DynamicResource TextPrimary}"
+                        ShowLineNumbers="True"
+                        IsReadOnly="True"
+                        WordWrap="{Binding EditorWordWrap}"
+                        BorderThickness="0"
+                        LineNumbersForeground="{DynamicResource TextMuted}"/>
                 </TabItem>
 
                 <TabItem Header="Headers">

@@ -38,6 +38,7 @@ public partial class RequestWorkspaceView : UserControl
         {
             RequestBodyEditor.Text = string.Empty;
             ResponsePrettyEditor.Text = string.Empty;
+            ResponseRawEditor.Text = string.Empty;
         }
     }
 
@@ -67,6 +68,10 @@ public partial class RequestWorkspaceView : UserControl
         {
             ResponsePrettyEditor.Text = _viewModel.ResponseBody;
         }
+        else if (e.PropertyName == nameof(RequestWorkspaceViewModel.RawResponseBody))
+        {
+            ResponseRawEditor.Text = _viewModel.RawResponseBody;
+        }
     }
 
     private void SyncEditorsFromViewModel()
@@ -78,5 +83,6 @@ public partial class RequestWorkspaceView : UserControl
         RequestBodyEditor.Text = _viewModel.RequestBody;
         _syncingEditorText = false;
         ResponsePrettyEditor.Text = _viewModel.ResponseBody;
+        ResponseRawEditor.Text = _viewModel.RawResponseBody;
     }
 }

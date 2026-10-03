@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Net.Http;
 using System.Text.Json;
 using System.Windows;
@@ -36,9 +37,11 @@ public partial class MainViewModel : ObservableObject
 
         AiImportSelectedModel = _aiImportService.AvailableModels[0];
 
+        // Session saves stay off until RestoreTabsFromDiskAsync has read tabs.json; a save
+        // scheduled during startup (settings load resets the initial tab) would otherwise
+        // overwrite the real session with this placeholder tab.
         _suppressTabSessionSave = true;
         AddBlankTab(select: true);
-        _suppressTabSessionSave = false;
     }
 
     public ObservableCollection<RequestWorkspaceViewModel> Tabs { get; } = [];
@@ -150,7 +153,7 @@ public partial class MainViewModel : ObservableObject
             return;
 
         var duplicate = CreateWorkspace();
-        duplicate.LoadRequestDraft(CloneRequest(SelectedTab.BuildRequestModel()), "Duplicated tab", isDirty: true);
+        duplicate.LoadRequestDraft(SelectedTab.BuildRequestModel(), "Duplicated tab", isDirty: true);
         Tabs.Insert(Tabs.IndexOf(SelectedTab) + 1, duplicate);
         SelectedTab = duplicate;
     }
@@ -199,7 +202,7 @@ public partial class MainViewModel : ObservableObject
                 if (request != null)
                 {
                     var tab = GetSmartOpenTarget();
-                    tab.LoadRequestDraft(request, $"Imported {System.IO.Path.GetFileName(dialog.FileName)}", isDirty: true);
+                    tab.LoadRequestDraft(request, $"Imported {Path.GetFileName(dialog.FileName)}", isDirty: true);
                 }
             }
             catch (Exception ex)
@@ -229,39 +232,36 @@ public partial class MainViewModel : ObservableObject
         HistoryItems.Clear();
         try
         {
-            await _persistenceService.SaveHistoryAsync([]);
+            await _persistenceService.SaveHistoryAsync([], _settings.MaxHistoryItems, mergeWithDisk: false);
         }
-        catch
+        catch (Exception ex)
         {
             // History persistence is best-effort; the in-memory list is already cleared.
+            ErrorLog.Write("Clear history", ex);
         }
     }
 
     [RelayCommand]
     private void LoadHistoryItem(HistoryItem? item)
     {
-        if (item is null)
+        if (item?.RequestSnapshot is null)
             return;
 
-        if (item.SavedRequestId.HasValue)
-        {
-            var saved = SavedRequests.FirstOrDefault(r => r.Id == item.SavedRequestId.Value);
-            if (saved != null)
-            {
-                LoadSavedRequest(saved);
-                return;
-            }
-        }
-
-        if (item.RequestSnapshot is null)
+        // Always the exact request that was sent. If it came from a saved request that still
+        // exists, the tab stays linked to it, so Save updates that entry — and the tab is
+        // only marked dirty when the snapshot differs from what's saved.
+        var request = _persistenceService.DeserializeRequest(item.RequestSnapshot, out var secretsReadable);
+        if (request is null)
             return;
 
-        var request = _persistenceService.DeserializeRequest(item.RequestSnapshot);
-        if (request != null)
-        {
-            var tab = GetSmartOpenTarget();
-            tab.LoadRequestDraft(request, $"Loaded {item.Method} {item.Url}", isDirty: true);
-        }
+        var saved = item.SavedRequestId is { } id ? SavedRequests.FirstOrDefault(r => r.Id == id) : null;
+        var status = $"Loaded {item.Method} {item.Url} from history";
+        if (!secretsReadable)
+            status += " - auth secrets couldn't be decrypted (saved by another Windows user or PC)";
+
+        var tab = GetSmartOpenTarget();
+        tab.LoadRequestDraft(request, status,
+            isDirty: saved is null || !RequestsMatch(request, saved.Request), linkedSaved: saved);
     }
 
     [RelayCommand]
@@ -270,9 +270,18 @@ public partial class MainViewModel : ObservableObject
         if (saved is null)
             return;
 
+        SelectedSavedRequest = saved;
+
+        // Already open in a tab: switch to it rather than opening a duplicate.
+        var open = Tabs.FirstOrDefault(t => t.ActiveSavedRequestId == saved.Id);
+        if (open != null)
+        {
+            SelectedTab = open;
+            return;
+        }
+
         var tab = GetSmartOpenTarget();
         tab.LoadSavedRequest(saved);
-        SelectedSavedRequest = saved;
     }
 
     [RelayCommand]
@@ -310,6 +319,11 @@ public partial class MainViewModel : ObservableObject
         if (saved is null)
             return;
 
+        var confirm = MessageBox.Show($"Delete \"{saved.Name}\"? This can't be undone.", "Delete Request",
+            MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (confirm != MessageBoxResult.Yes)
+            return;
+
         try
         {
             _savedRequestService.Delete(saved.Id);
@@ -336,7 +350,7 @@ public partial class MainViewModel : ObservableObject
         var duplicate = new SavedRequest
         {
             Name = saved.Name + " (copy)",
-            Request = CloneRequest(saved.Request)
+            Request = saved.Request.Clone()
         };
 
         SavedRequests.Insert(0, duplicate);
@@ -414,6 +428,10 @@ public partial class MainViewModel : ObservableObject
         {
             AiImportError = ex.Message;
         }
+        catch (TimeoutException ex)
+        {
+            AiImportError = ex.Message;
+        }
         catch (OperationCanceledException)
         {
             AiImportError = "Import cancelled.";
@@ -453,6 +471,7 @@ public partial class MainViewModel : ObservableObject
 
         if (dialog.ShowDialog() == true)
         {
+            var previousHistoryPath = _persistenceService.EffectiveHistoryFilePath;
             _settings = editCopy;
             ApplySettings();
             try
@@ -463,6 +482,12 @@ public partial class MainViewModel : ObservableObject
             {
                 MessageBox.Show($"Settings applied but could not be saved to disk: {ex.Message}",
                     "Settings", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+
+            if (!string.Equals(Path.GetFullPath(previousHistoryPath),
+                    Path.GetFullPath(_persistenceService.EffectiveHistoryFilePath), StringComparison.OrdinalIgnoreCase))
+            {
+                await SwitchHistoryFileAsync();
             }
         }
     }
@@ -483,16 +508,46 @@ public partial class MainViewModel : ObservableObject
             HistoryItems.Add(item);
     }
 
+    // The history file location changed. An existing file there is adopted as-is (never
+    // overwritten); a new location starts from the current history, which is then merged
+    // into it.
+    private async Task SwitchHistoryFileAsync()
+    {
+        var path = _persistenceService.EffectiveHistoryFilePath;
+        if (File.Exists(path))
+        {
+            HistoryItems.Clear();
+            await LoadHistoryFromDiskAsync();
+            TrimHistory();
+        }
+        else
+        {
+            await PersistHistoryAsync(HistoryItems.ToList());
+        }
+    }
+
+    // False while the library is still loading at startup (tabs are restored before it).
+    public bool IsSavedLibraryLoaded { get; private set; }
+
     public async Task LoadSavedRequestsFromDiskAsync()
     {
-        var items = await _savedRequestService.LoadAllAsync();
-        foreach (var item in items)
-            SavedRequests.Add(item);
+        try
+        {
+            var items = await _savedRequestService.LoadAllAsync();
+            foreach (var item in items)
+                SavedRequests.Add(item);
+        }
+        finally
+        {
+            IsSavedLibraryLoaded = true;
+        }
     }
 
     public async Task RestoreTabsFromDiskAsync()
     {
         _suppressTabSessionSave = true;
+        _tabSessionSaveTimer?.Dispose();
+        _tabSessionSaveTimer = null;
         try
         {
             await RestoreTabsCoreAsync();
@@ -519,18 +574,12 @@ public partial class MainViewModel : ObservableObject
 
         if (session?.Tabs.Count > 0)
         {
+            // Links to saved requests are kept as stored; RelinkTabsToSavedRequests checks
+            // them once the library has loaded, so restoring never waits on it.
             foreach (var draft in session.Tabs)
             {
                 var tab = CreateWorkspace();
                 tab.ApplyDraft(draft);
-                if (draft.SavedRequestId.HasValue)
-                {
-                    var saved = SavedRequests.FirstOrDefault(r => r.Id == draft.SavedRequestId.Value);
-                    if (saved != null)
-                        tab.RenameSavedRequestLink(saved.Id, saved.Name);
-                    else
-                        tab.ClearSavedRequestLink(draft.SavedRequestId.Value);
-                }
                 Tabs.Add(tab);
             }
 
@@ -544,14 +593,7 @@ public partial class MainViewModel : ObservableObject
                 var tab = CreateWorkspace();
                 tab.LoadRequestDraft(autosave.Request, "Restored from autosave", isDirty: true);
                 if (autosave.Id != Guid.Empty)
-                {
-                    var saved = SavedRequests.FirstOrDefault(r => r.Id == autosave.Id);
-                    if (saved != null)
-                    {
-                        tab.ActiveSavedRequestId = saved.Id;
-                        tab.ActiveRequestName = saved.Name;
-                    }
-                }
+                    tab.ActiveSavedRequestId = autosave.Id; // checked by RelinkTabsToSavedRequests
 
                 Tabs.Add(tab);
                 SelectedTab = tab;
@@ -564,8 +606,30 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
+    // Restored tabs remember which saved request they belong to. Once the library has
+    // loaded, refresh their names (renamed since) or drop links to deleted entries.
+    public void RelinkTabsToSavedRequests()
+    {
+        foreach (var tab in Tabs)
+        {
+            if (tab.ActiveSavedRequestId is not { } id)
+                continue;
+
+            var saved = SavedRequests.FirstOrDefault(r => r.Id == id);
+            if (saved != null)
+                tab.RenameSavedRequestLink(id, saved.Name);
+            else
+                tab.ClearSavedRequestLink(id);
+        }
+    }
+
     public async Task SaveTabsSessionNowAsync()
     {
+        // Until the session has been restored, Tabs holds only a startup placeholder;
+        // writing it would replace the user's real session.
+        if (_suppressTabSessionSave)
+            return;
+
         _tabSessionSaveTimer?.Dispose();
         _tabSessionSaveTimer = null;
 
@@ -579,9 +643,10 @@ public partial class MainViewModel : ObservableObject
             };
             await _tabSessionService.SaveAsync(session).ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
             // Tab drafts are best-effort; saved requests remain the durable source.
+            ErrorLog.Write("Save tab session", ex);
         }
     }
 
@@ -608,12 +673,13 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
-            await _persistenceService.SaveHistoryAsync(snapshot);
+            await _persistenceService.SaveHistoryAsync(snapshot, _settings.MaxHistoryItems);
         }
-        catch
+        catch (Exception ex)
         {
             // History persistence is best-effort and runs fire-and-forget after every
             // send — a failed write must never surface as an unobserved exception.
+            ErrorLog.Write("Save history", ex);
         }
     }
 
@@ -673,6 +739,9 @@ public partial class MainViewModel : ObservableObject
 
         if (_aiImportService.AvailableModels.Contains(_settings.AiDefaultModel))
             AiImportSelectedModel = _settings.AiDefaultModel;
+
+        // A lowered limit applies right away, not only after the next send.
+        TrimHistory();
     }
 
     private void TrimHistory()
@@ -684,15 +753,9 @@ public partial class MainViewModel : ObservableObject
         }
     }
 
-    private static RequestModel CloneRequest(RequestModel request)
-    {
-        var json = JsonSerializer.Serialize(request);
-        return JsonSerializer.Deserialize<RequestModel>(json) ?? new RequestModel();
-    }
+    private static bool RequestsMatch(RequestModel a, RequestModel b) =>
+        JsonSerializer.Serialize(a) == JsonSerializer.Serialize(b);
 
-    private static string FormatRequestPreviewJson(RequestModel request)
-    {
-        var options = new JsonSerializerOptions { WriteIndented = true };
-        return JsonSerializer.Serialize(request, options);
-    }
+    private static string FormatRequestPreviewJson(RequestModel request) =>
+        JsonSerializer.Serialize(request, JsonDefaults.Display);
 }

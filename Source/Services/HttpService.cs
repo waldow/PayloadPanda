@@ -1,8 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text;
-using System.Web;
 using PayloadPanda.Models;
 
 namespace PayloadPanda.Services;
@@ -41,117 +39,78 @@ public class HttpService
 
     public async Task<ResponseModel> SendAsync(RequestModel request, CancellationToken ct)
     {
+        var composed = RequestComposer.Compose(request, includeClientDefaults: true);
         var client = GetClient(request.FollowRedirects);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds, 1, 300)));
         var token = timeoutCts.Token;
 
-        var url = BuildUrl(request);
-        var method = request.Method switch
-        {
-            HttpMethodType.GET => HttpMethod.Get,
-            HttpMethodType.POST => HttpMethod.Post,
-            HttpMethodType.PUT => HttpMethod.Put,
-            HttpMethodType.DELETE => HttpMethod.Delete,
-            HttpMethodType.PATCH => HttpMethod.Patch,
-            HttpMethodType.HEAD => HttpMethod.Head,
-            HttpMethodType.OPTIONS => HttpMethod.Options,
-            _ => HttpMethod.Get
-        };
+        using var httpRequest = new HttpRequestMessage(ToHttpMethod(composed.Method), composed.Uri);
 
-        using var httpRequest = new HttpRequestMessage(method, url);
-
-        // Headers
-        foreach (var header in request.Headers.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
+        HttpContent? content = composed.HasBody ? new ByteArrayContent(composed.Body) : null;
+        foreach (var (key, value) in composed.Headers)
         {
-            httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            if (httpRequest.Headers.TryAddWithoutValidation(key, value))
+                continue;
+
+            // Content-Type and the other Content-* headers belong to HttpContent; the
+            // request-header collection rejects them. A request without a body still
+            // carries them, since some APIs insist on Content-Type even for a GET.
+            content ??= new ByteArrayContent([]);
+            content.Headers.TryAddWithoutValidation(key, value);
         }
-
-        // Auth
-        switch (request.AuthMode)
-        {
-            case AuthMode.Bearer:
-                httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", request.AuthToken);
-                break;
-            case AuthMode.Basic:
-                var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{request.AuthUsername}:{request.AuthPassword}"));
-                httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-                break;
-            case AuthMode.ApiKey:
-                httpRequest.Headers.TryAddWithoutValidation(
-                    string.IsNullOrWhiteSpace(request.ApiKeyHeader) ? "X-API-Key" : request.ApiKeyHeader,
-                    request.ApiKeyValue);
-                break;
-        }
-
-        // Body
-        if (request.BodyMode != BodyMode.None && method != HttpMethod.Get && method != HttpMethod.Head)
-        {
-            switch (request.BodyMode)
-            {
-                case BodyMode.Json:
-                    httpRequest.Content = new StringContent(request.BodyText, Encoding.UTF8, "application/json");
-                    break;
-                case BodyMode.Xml:
-                    httpRequest.Content = new StringContent(request.BodyText, Encoding.UTF8, "application/xml");
-                    break;
-                case BodyMode.Raw:
-                    httpRequest.Content = new StringContent(request.BodyText, Encoding.UTF8, "text/plain");
-                    break;
-                case BodyMode.FormUrlEncoded:
-                    httpRequest.Content = new StringContent(request.BodyText, Encoding.UTF8, "application/x-www-form-urlencoded");
-                    break;
-            }
-        }
+        httpRequest.Content = content;
 
         var sw = Stopwatch.StartNew();
-        using var httpResponse = await client.SendAsync(httpRequest, token);
+        using var httpResponse = await client
+            .SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, token)
+            .ConfigureAwait(false);
+        await using var stream = await httpResponse.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        var (bodyBytes, truncated) = await ResponseText
+            .ReadCappedAsync(stream, ResponseText.MaxBodyBytes, token)
+            .ConfigureAwait(false);
         sw.Stop();
 
-        var bodyBytes = await httpResponse.Content.ReadAsByteArrayAsync(token);
-        var bodyText = Encoding.UTF8.GetString(bodyBytes);
-
-        var responseHeaders = new Dictionary<string, string>();
-        foreach (var header in httpResponse.Headers)
-        {
-            responseHeaders[header.Key] = string.Join("; ", header.Value);
-        }
-        foreach (var header in httpResponse.Content.Headers)
-        {
-            responseHeaders[header.Key] = string.Join("; ", header.Value);
-        }
+        // NonValidated yields each header line as the server sent it, without the parsing
+        // that would re-split or re-join values.
+        var headers = new List<KeyValuePair<string, string>>();
+        AddRawHeaders(headers, httpResponse.Headers.NonValidated);
+        AddRawHeaders(headers, httpResponse.Content.Headers.NonValidated);
+        var contentType = ResponseModel.FindHeader(headers, "Content-Type") ?? string.Empty;
 
         return new ResponseModel
         {
             StatusCode = (int)httpResponse.StatusCode,
             ReasonPhrase = httpResponse.ReasonPhrase ?? string.Empty,
-            Headers = responseHeaders,
-            Body = bodyText,
+            Headers = headers,
+            Body = ResponseText.Decode(bodyBytes, contentType),
             BodyBytes = bodyBytes,
             Duration = sw.Elapsed,
-            ContentType = httpResponse.Content.Headers.ContentType?.ToString() ?? string.Empty,
-            ResponseSize = bodyBytes.Length
+            ContentType = contentType,
+            ResponseSize = bodyBytes.Length,
+            IsTruncated = truncated
         };
     }
 
-    private static string BuildUrl(RequestModel request)
+    private static void AddRawHeaders(List<KeyValuePair<string, string>> target, HttpHeadersNonValidated source)
     {
-        var url = request.Url.Trim();
-        var enabledParams = request.QueryParams.Where(p => p.IsEnabled && !string.IsNullOrWhiteSpace(p.Key)).ToList();
-
-        if (enabledParams.Count == 0)
-            return url;
-
-        var uriBuilder = new UriBuilder(url);
-        var query = HttpUtility.ParseQueryString(uriBuilder.Query);
-
-        foreach (var param in enabledParams)
+        foreach (var (name, values) in source)
         {
-            query[param.Key] = param.Value;
+            foreach (var value in values)
+                target.Add(new(name, value));
         }
-
-        uriBuilder.Query = query.ToString();
-        return uriBuilder.ToString();
     }
+
+    private static HttpMethod ToHttpMethod(HttpMethodType method) => method switch
+    {
+        HttpMethodType.GET => HttpMethod.Get,
+        HttpMethodType.POST => HttpMethod.Post,
+        HttpMethodType.PUT => HttpMethod.Put,
+        HttpMethodType.DELETE => HttpMethod.Delete,
+        HttpMethodType.PATCH => HttpMethod.Patch,
+        HttpMethodType.HEAD => HttpMethod.Head,
+        HttpMethodType.OPTIONS => HttpMethod.Options,
+        _ => HttpMethod.Get
+    };
 }

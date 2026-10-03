@@ -6,30 +6,7 @@ namespace PayloadPanda.Services;
 
 public class RequestTabSessionService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-
-    private static readonly JsonSerializerOptions ReadOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
-    private static string AppDataFolder
-    {
-        get
-        {
-            var folder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "PayloadPanda");
-            Directory.CreateDirectory(folder);
-            return folder;
-        }
-    }
-
-    private static string SessionFilePath => Path.Combine(AppDataFolder, "tabs.json");
+    private static string SessionFilePath => Path.Combine(AppPaths.DataFolder, "tabs.json");
 
     public async Task SaveAsync(RequestTabSession session)
     {
@@ -49,7 +26,7 @@ public class RequestTabSessionService
             }).ToList()
         };
 
-        var json = JsonSerializer.Serialize(encrypted, JsonOptions);
+        var json = JsonSerializer.Serialize(encrypted, JsonDefaults.Write);
         await AtomicFile.WriteAllTextAsync(SessionFilePath, json).ConfigureAwait(false);
     }
 
@@ -61,7 +38,7 @@ public class RequestTabSessionService
         try
         {
             var json = await File.ReadAllTextAsync(SessionFilePath).ConfigureAwait(false);
-            var session = JsonSerializer.Deserialize<RequestTabSession>(json, ReadOptions);
+            var session = JsonSerializer.Deserialize<RequestTabSession>(json, JsonDefaults.Read);
             if (session is null)
                 return null;
 

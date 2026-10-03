@@ -3,12 +3,16 @@ using PayloadPanda.Models;
 namespace PayloadPanda.Services;
 
 /// <summary>
-/// Evaluates a response against the browser CORS rules and explains, in plain terms,
-/// whether the request would be allowed and what (if anything) is missing.
+/// Evaluates a response against the browser CORS rules (the Fetch standard's CORS check
+/// and CORS-preflight fetch) and explains, in plain terms, whether the request would be
+/// allowed and what (if anything) is missing.
 /// Pure and side-effect free so it can be unit tested in isolation.
 /// </summary>
 public static class CorsAnalyzer
 {
+    // Methods a browser never needs Access-Control-Allow-Methods to permit.
+    private static readonly string[] SafelistedMethods = ["GET", "HEAD", "POST"];
+
     public static CorsAnalysisResult Analyze(
         string origin,
         string method,
@@ -45,8 +49,8 @@ public static class CorsAnalyzer
         }
 
         // Access-Control-Allow-Origin
-        var hasAllowOrigin = TryGetHeader(response, "Access-Control-Allow-Origin", out var allowOrigin);
-        if (!hasAllowOrigin)
+        var allowOrigin = response.GetHeader("Access-Control-Allow-Origin");
+        if (allowOrigin is null)
         {
             checks.Add(new CorsCheck
             {
@@ -58,8 +62,8 @@ public static class CorsAnalyzer
         else
         {
             var isWildcard = allowOrigin.Trim() == "*";
-            var matchesOrigin = isWildcard
-                || allowOrigin.Trim().Equals(origin, StringComparison.OrdinalIgnoreCase);
+            // Browsers compare the serialized origin byte for byte — case included.
+            var matchesOrigin = isWildcard || allowOrigin.Trim().Equals(origin, StringComparison.Ordinal);
 
             checks.Add(new CorsCheck
             {
@@ -67,7 +71,7 @@ public static class CorsAnalyzer
                 Status = matchesOrigin ? CorsCheckStatus.Pass : CorsCheckStatus.Fail,
                 Detail = matchesOrigin
                     ? allowOrigin
-                    : $"\"{allowOrigin}\" does not match the Origin \"{origin}\"."
+                    : $"\"{allowOrigin}\" does not exactly match the Origin \"{origin}\" (the comparison is case-sensitive)."
             });
 
             // Wildcard + credentials is rejected by browsers.
@@ -85,57 +89,31 @@ public static class CorsAnalyzer
         // Access-Control-Allow-Credentials
         if (includeCredentials)
         {
-            var hasAllowCreds = TryGetHeader(response, "Access-Control-Allow-Credentials", out var allowCreds);
-            var credsOk = hasAllowCreds && allowCreds.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+            var allowCreds = response.GetHeader("Access-Control-Allow-Credentials");
+            var credsOk = allowCreds?.Trim() == "true";
             checks.Add(new CorsCheck
             {
                 Label = "Access-Control-Allow-Credentials",
                 Status = credsOk ? CorsCheckStatus.Pass : CorsCheckStatus.Fail,
                 Detail = credsOk
                     ? "true"
-                    : hasAllowCreds
-                        ? $"\"{allowCreds}\" — must be \"true\" for a credentialed request."
+                    : allowCreds is not null
+                        ? $"\"{allowCreds}\" — must be exactly \"true\" for a credentialed request."
                         : "missing — required to be \"true\" for a credentialed request."
             });
         }
 
         if (isPreflight)
         {
-            // Access-Control-Allow-Methods must include the requested method.
             if (!string.IsNullOrEmpty(method))
-            {
-                var hasAllowMethods = TryGetHeader(response, "Access-Control-Allow-Methods", out var allowMethods);
-                var methodOk = hasAllowMethods && ListAllows(allowMethods, method);
-                checks.Add(new CorsCheck
-                {
-                    Label = "Access-Control-Allow-Methods",
-                    Status = methodOk ? CorsCheckStatus.Pass : CorsCheckStatus.Fail,
-                    Detail = !hasAllowMethods
-                        ? $"missing — does not permit {method}."
-                        : methodOk
-                            ? allowMethods
-                            : $"\"{allowMethods}\" does not include {method}."
-                });
-            }
+                checks.Add(CheckMethod(method, response.GetHeader("Access-Control-Allow-Methods"), includeCredentials));
 
-            // Access-Control-Allow-Headers must include each requested header.
             var requested = SplitList(requestedHeaders);
             if (requested.Count > 0)
-            {
-                var hasAllowHeaders = TryGetHeader(response, "Access-Control-Allow-Headers", out var allowHeaders);
-                var missing = requested.Where(h => !(hasAllowHeaders && ListAllows(allowHeaders, h))).ToList();
-                checks.Add(new CorsCheck
-                {
-                    Label = "Access-Control-Allow-Headers",
-                    Status = missing.Count == 0 ? CorsCheckStatus.Pass : CorsCheckStatus.Fail,
-                    Detail = missing.Count == 0
-                        ? (hasAllowHeaders ? allowHeaders : "all requested headers allowed")
-                        : $"not allowed: {string.Join(", ", missing)}."
-                });
-            }
+                checks.Add(CheckHeaders(requested, response.GetHeader("Access-Control-Allow-Headers"), includeCredentials));
 
             // Access-Control-Max-Age (informational).
-            if (TryGetHeader(response, "Access-Control-Max-Age", out var maxAge))
+            if (response.GetHeader("Access-Control-Max-Age") is { } maxAge)
             {
                 checks.Add(new CorsCheck
                 {
@@ -155,32 +133,84 @@ public static class CorsAnalyzer
         return result;
     }
 
-    private static bool ListAllows(string headerValue, string token)
+    // A method passes if it's listed, if it's CORS-safelisted (GET/HEAD/POST), or if the
+    // list is "*" — which counts as a wildcard only for requests without credentials.
+    private static CorsCheck CheckMethod(string method, string? allowMethods, bool includeCredentials)
     {
-        if (string.IsNullOrWhiteSpace(headerValue))
-            return false;
-        if (headerValue.Trim() == "*")
-            return true;
-        return SplitList(headerValue).Any(v => v.Equals(token.Trim(), StringComparison.OrdinalIgnoreCase));
+        const string label = "Access-Control-Allow-Methods";
+        var listed = SplitList(allowMethods);
+
+        if (listed.Contains(method, StringComparer.OrdinalIgnoreCase))
+            return new CorsCheck { Label = label, Status = CorsCheckStatus.Pass, Detail = allowMethods! };
+
+        if (SafelistedMethods.Contains(method, StringComparer.OrdinalIgnoreCase))
+        {
+            return new CorsCheck
+            {
+                Label = label,
+                Status = CorsCheckStatus.Pass,
+                Detail = $"{method} is a CORS-safelisted method — it doesn't need to be listed."
+            };
+        }
+
+        if (listed.Contains("*"))
+        {
+            return includeCredentials
+                ? new CorsCheck
+                {
+                    Label = label,
+                    Status = CorsCheckStatus.Fail,
+                    Detail = $"\"*\" is treated literally for credentialed requests, so {method} must be listed explicitly."
+                }
+                : new CorsCheck { Label = label, Status = CorsCheckStatus.Pass, Detail = allowMethods! };
+        }
+
+        return new CorsCheck
+        {
+            Label = label,
+            Status = CorsCheckStatus.Fail,
+            Detail = allowMethods is null
+                ? $"missing — does not permit {method}."
+                : $"\"{allowMethods}\" does not include {method}."
+        };
     }
 
-    private static List<string> SplitList(string value) =>
+    // Each requested header must be listed. "*" covers the rest only for requests without
+    // credentials, and never covers Authorization, which must always be named explicitly.
+    private static CorsCheck CheckHeaders(List<string> requested, string? allowHeaders, bool includeCredentials)
+    {
+        const string label = "Access-Control-Allow-Headers";
+        var listed = SplitList(allowHeaders);
+        var wildcard = listed.Contains("*") && !includeCredentials;
+
+        var notAllowed = requested
+            .Where(h => !listed.Contains(h, StringComparer.OrdinalIgnoreCase))
+            .Where(h => !wildcard || h.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (notAllowed.Count == 0)
+        {
+            return new CorsCheck
+            {
+                Label = label,
+                Status = CorsCheckStatus.Pass,
+                Detail = allowHeaders ?? "all requested headers allowed"
+            };
+        }
+
+        var reasons = new List<string> { $"not allowed: {string.Join(", ", notAllowed)}." };
+        if (listed.Contains("*"))
+        {
+            reasons.Add(includeCredentials
+                ? "\"*\" is treated literally for credentialed requests."
+                : "\"*\" never covers Authorization — it must be listed explicitly.");
+        }
+
+        return new CorsCheck { Label = label, Status = CorsCheckStatus.Fail, Detail = string.Join(" ", reasons) };
+    }
+
+    private static List<string> SplitList(string? value) =>
         (value ?? string.Empty)
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
-
-    private static bool TryGetHeader(ResponseModel response, string name, out string value)
-    {
-        foreach (var header in response.Headers)
-        {
-            if (header.Key.Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
-                value = header.Value;
-                return true;
-            }
-        }
-
-        value = string.Empty;
-        return false;
-    }
 }

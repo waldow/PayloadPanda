@@ -24,22 +24,7 @@ public class SettingsModel
     public string AiDefaultModel { get; set; } = "gpt-5-nano";
     public int AiTimeoutSeconds { get; set; } = 60;
 
-    public SettingsModel Clone()
-    {
-        return new SettingsModel
-        {
-            HistoryFilePath = HistoryFilePath,
-            MaxHistoryItems = MaxHistoryItems,
-            DefaultTimeoutSeconds = DefaultTimeoutSeconds,
-            DefaultFollowRedirects = DefaultFollowRedirects,
-            SslCertificateVerification = SslCertificateVerification,
-            EditorFontSize = EditorFontSize,
-            EditorWordWrap = EditorWordWrap,
-            CurlExportStyle = CurlExportStyle,
-            OpenAiApiKey = OpenAiApiKey,
-            AiEndpoint = AiEndpoint,
-            AiDefaultModel = AiDefaultModel,
-            AiTimeoutSeconds = AiTimeoutSeconds
-        };
-    }
+    // Every property is a string or value type, so a shallow copy is a full copy and
+    // new settings are picked up without touching this method.
+    public SettingsModel Clone() => (SettingsModel)MemberwiseClone();
 }
