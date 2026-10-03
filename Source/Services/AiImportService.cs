@@ -9,28 +9,22 @@ namespace PayloadPanda.Services;
 
 public class AiImportService
 {
-    private HttpClient _httpClient = new()
-    {
-        Timeout = TimeSpan.FromSeconds(60)
-    };
+    public const string DefaultEndpoint = "https://api.openai.com/v1/chat/completions";
 
-    private string _endpoint = "https://api.openai.com/v1/chat/completions";
+    // One long-lived client; the timeout is applied per request, so reconfiguring never
+    // has to dispose a client that may still have a request in flight.
+    private readonly HttpClient _httpClient = new() { Timeout = Timeout.InfiniteTimeSpan };
+
+    private string _endpoint = DefaultEndpoint;
     private string? _configuredApiKey;
+    private TimeSpan _timeout = TimeSpan.FromSeconds(60);
     private const int MaxInputLength = 8000;
 
     public void Configure(string? apiKey, string? endpoint, int timeoutSeconds)
     {
         _configuredApiKey = apiKey;
-
-        if (!string.IsNullOrWhiteSpace(endpoint))
-            _endpoint = endpoint;
-
-        var previous = _httpClient;
-        _httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 60)
-        };
-        previous.Dispose();
+        _endpoint = string.IsNullOrWhiteSpace(endpoint) ? DefaultEndpoint : endpoint.Trim();
+        _timeout = TimeSpan.FromSeconds(timeoutSeconds > 0 ? timeoutSeconds : 60);
     }
 
     public string[] AvailableModels { get; } = ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-5.2", "gpt-5.4-nano", "gpt-5.4-mini"];
@@ -81,16 +75,23 @@ public class AiImportService
 
     public async Task<AiImportResult> ParseRequestAsync(string input, string model, CancellationToken cancellationToken)
     {
-        var apiKey = !string.IsNullOrWhiteSpace(_configuredApiKey)
-            ? _configuredApiKey
-            : Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-        if (string.IsNullOrWhiteSpace(apiKey))
-            throw new InvalidOperationException("API key not found. Set it in Settings or the OPENAI_API_KEY environment variable.");
-
         if (!Uri.TryCreate(_endpoint, UriKind.Absolute, out var endpointUri) ||
             (endpointUri.Scheme != Uri.UriSchemeHttp && endpointUri.Scheme != Uri.UriSchemeHttps))
         {
             throw new InvalidOperationException("AI endpoint is not a valid http(s) URL. Check Settings.");
+        }
+
+        // The OPENAI_API_KEY fallback is only ever sent to OpenAI itself, never to a
+        // custom endpoint the variable wasn't meant for.
+        var isOpenAi = endpointUri.Host.Equals("api.openai.com", StringComparison.OrdinalIgnoreCase);
+        var apiKey = !string.IsNullOrWhiteSpace(_configuredApiKey)
+            ? _configuredApiKey
+            : isOpenAi ? Environment.GetEnvironmentVariable("OPENAI_API_KEY") : null;
+        if (string.IsNullOrWhiteSpace(apiKey))
+        {
+            throw new InvalidOperationException(isOpenAi
+                ? "API key not found. Set it in Settings or the OPENAI_API_KEY environment variable."
+                : "API key not found. Set it in Settings.");
         }
 
         var warnings = new List<string>();
@@ -117,32 +118,7 @@ public class AiImportService
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        HttpResponseMessage response;
-        try
-        {
-            response = await _httpClient.SendAsync(request, cancellationToken);
-        }
-        catch (HttpRequestException ex)
-        {
-            throw new HttpRequestException($"Network error: {ex.Message}", ex);
-        }
-
-        if (!response.IsSuccessStatusCode)
-        {
-            var statusCode = (int)response.StatusCode;
-            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
-            if (errorBody.Length > 500)
-                errorBody = errorBody[..500] + "…";
-
-            throw statusCode switch
-            {
-                401 => new HttpRequestException("Invalid API key. Check your OPENAI_API_KEY."),
-                429 => new HttpRequestException("Rate limited by OpenAI. Wait a moment and retry."),
-                _ => new HttpRequestException($"OpenAI API error ({statusCode}): {errorBody}")
-            };
-        }
-
-        var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseJson = await SendAsync(request, cancellationToken);
 
         // Extract choices[0].message.content from the OpenAI response
         string contentJson;
@@ -155,7 +131,8 @@ public class AiImportService
                 .GetProperty("content")
                 .GetString() ?? throw new JsonException("Empty content");
         }
-        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or IndexOutOfRangeException)
+        // InvalidOperationException: an element has the wrong JSON kind (e.g. "choices": null).
+        catch (Exception ex) when (ex is JsonException or KeyNotFoundException or IndexOutOfRangeException or InvalidOperationException)
         {
             throw new InvalidOperationException("AI returned unexpected format. Try rephrasing your input.");
         }
@@ -185,7 +162,42 @@ public class AiImportService
         return result;
     }
 
-    private static RequestModel ConvertDtoToRequest(AiImportResponseDto dto)
+    private async Task<string> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(_timeout);
+
+        try
+        {
+            using var response = await _httpClient.SendAsync(request, timeoutCts.Token);
+            var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
+            if (response.IsSuccessStatusCode)
+                return body;
+
+            var statusCode = (int)response.StatusCode;
+            if (body.Length > 500)
+                body = body[..500] + "…";
+
+            var message = statusCode switch
+            {
+                401 => "Invalid API key (401). Check the key in Settings.",
+                429 => "Rate limited by the AI provider (429). Wait a moment and retry.",
+                _ => $"AI provider error ({statusCode}): {body}"
+            };
+            throw new HttpRequestException(message, null, response.StatusCode);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The AI request timed out after {_timeout.TotalSeconds:F0} seconds.");
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is null)
+        {
+            // Connection-level failure (DNS, refused, TLS) — not an HTTP error response.
+            throw new HttpRequestException($"Network error: {ex.Message}", ex);
+        }
+    }
+
+    internal static RequestModel ConvertDtoToRequest(AiImportResponseDto dto)
     {
         var request = new RequestModel
         {
@@ -194,7 +206,7 @@ public class AiImportService
             AuthToken = dto.AuthToken ?? string.Empty,
             AuthUsername = dto.AuthUsername ?? string.Empty,
             AuthPassword = dto.AuthPassword ?? string.Empty,
-            ApiKeyHeader = dto.ApiKeyHeader ?? "X-API-Key",
+            ApiKeyHeader = dto.ApiKeyHeader ?? RequestComposer.DefaultApiKeyHeader,
             ApiKeyValue = dto.ApiKeyValue ?? string.Empty,
             TimeoutSeconds = dto.TimeoutSeconds ?? 30,
             FollowRedirects = dto.FollowRedirects ?? true

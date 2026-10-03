@@ -1,7 +1,9 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using Microsoft.Win32;
 using PayloadPanda.Models;
+using PayloadPanda.Services;
 
 namespace PayloadPanda.Views;
 
@@ -27,7 +29,7 @@ public partial class SettingsWindow : Window
         SslVerificationBox.IsChecked = _settings.SslCertificateVerification;
         FontSizeBox.Text = _settings.EditorFontSize.ToString();
         WordWrapBox.IsChecked = _settings.EditorWordWrap;
-        CurlStyleBox.SelectedIndex = (int)_settings.CurlExportStyle;
+        SelectCurlStyle(_settings.CurlExportStyle);
         ApiKeyBox.Password = _settings.OpenAiApiKey ?? string.Empty;
         AiEndpointBox.Text = _settings.AiEndpoint;
         AiModelBox.SelectedItem = _settings.AiDefaultModel;
@@ -95,16 +97,30 @@ public partial class SettingsWindow : Window
         _settings.SslCertificateVerification = SslVerificationBox.IsChecked == true;
         _settings.EditorFontSize = fontSize;
         _settings.EditorWordWrap = WordWrapBox.IsChecked == true;
-        _settings.CurlExportStyle = (CurlExportStyle)Math.Max(0, CurlStyleBox.SelectedIndex);
+        _settings.CurlExportStyle = SelectedCurlStyle();
         _settings.OpenAiApiKey = string.IsNullOrWhiteSpace(ApiKeyBox.Password) ? null : ApiKeyBox.Password;
         _settings.AiEndpoint = string.IsNullOrWhiteSpace(AiEndpointBox.Text)
-            ? "https://api.openai.com/v1/chat/completions"
+            ? AiImportService.DefaultEndpoint
             : AiEndpointBox.Text.Trim();
         _settings.AiDefaultModel = AiModelBox.SelectedItem as string ?? "gpt-5-nano";
         _settings.AiTimeoutSeconds = aiTimeout;
 
         return true;
     }
+
+    private void SelectCurlStyle(CurlExportStyle style)
+    {
+        CurlStyleBox.SelectedItem = CurlStyleBox.Items
+            .OfType<ComboBoxItem>()
+            .FirstOrDefault(item => (string)item.Tag == style.ToString());
+        if (CurlStyleBox.SelectedIndex < 0)
+            CurlStyleBox.SelectedIndex = 0;
+    }
+
+    private CurlExportStyle SelectedCurlStyle() =>
+        CurlStyleBox.SelectedItem is ComboBoxItem { Tag: string tag } && Enum.TryParse<CurlExportStyle>(tag, out var style)
+            ? style
+            : CurlExportStyle.Bash;
 
     private void BrowseHistoryPath_Click(object sender, RoutedEventArgs e)
     {
@@ -137,7 +153,7 @@ public partial class SettingsWindow : Window
         SslVerificationBox.IsChecked = defaults.SslCertificateVerification;
         FontSizeBox.Text = defaults.EditorFontSize.ToString();
         WordWrapBox.IsChecked = defaults.EditorWordWrap;
-        CurlStyleBox.SelectedIndex = (int)defaults.CurlExportStyle;
+        SelectCurlStyle(defaults.CurlExportStyle);
         ApiKeyBox.Password = string.Empty;
         AiEndpointBox.Text = defaults.AiEndpoint;
         AiModelBox.SelectedItem = defaults.AiDefaultModel;

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text.Json;
 using PayloadPanda.Models;
@@ -6,40 +7,19 @@ namespace PayloadPanda.Services;
 
 public class SavedRequestService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-
-    private static readonly JsonSerializerOptions ReadOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
-    private static string AppDataFolder
-    {
-        get
-        {
-            var folder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "PayloadPanda");
-            Directory.CreateDirectory(folder);
-            return folder;
-        }
-    }
-
     private static string RequestsFolder
     {
         get
         {
-            var folder = Path.Combine(AppDataFolder, "requests");
+            var folder = Path.Combine(AppPaths.DataFolder, "requests");
             Directory.CreateDirectory(folder);
             return folder;
         }
     }
 
-    private static string AutosaveFilePath => Path.Combine(AppDataFolder, "autosave.json");
+    // Written by versions before the multi-tab session (tabs.json); still read once
+    // at startup so an old autosave is restored, then cleared.
+    private static string AutosaveFilePath => Path.Combine(AppPaths.DataFolder, "autosave.json");
 
     // ==================== CRUD ====================
 
@@ -47,35 +27,38 @@ public class SavedRequestService
     {
         request.ModifiedAt = DateTime.Now;
         var filePath = Path.Combine(RequestsFolder, $"{request.Id}.json");
-        var json = JsonSerializer.Serialize(BuildEncryptedCopy(request), JsonOptions);
+        var json = JsonSerializer.Serialize(BuildEncryptedCopy(request), JsonDefaults.Write);
         await AtomicFile.WriteAllTextAsync(filePath, json);
     }
 
-    public async Task<List<SavedRequest>> LoadAllAsync()
-    {
-        var folder = RequestsFolder;
-        if (!Directory.Exists(folder))
-            return [];
+    public Task<List<SavedRequest>> LoadAllAsync() => Task.Run(LoadAll);
 
-        var results = new List<SavedRequest>();
-        foreach (var file in Directory.GetFiles(folder, "*.json"))
-        {
-            try
+    // Synchronous reads spread over a few pool threads: with hundreds of small files the
+    // per-file latency (antivirus scanning in particular) dominates, and overlapping it
+    // keeps startup fast. One file per request, so every read is independent.
+    private static List<SavedRequest> LoadAll()
+    {
+        var results = new ConcurrentBag<SavedRequest>();
+        Parallel.ForEach(
+            Directory.EnumerateFiles(RequestsFolder, "*.json"),
+            new ParallelOptions { MaxDegreeOfParallelism = 8 },
+            file =>
             {
-                var json = await File.ReadAllTextAsync(file);
-                var request = JsonSerializer.Deserialize<SavedRequest>(json, ReadOptions);
-                if (request?.Request != null)
+                try
                 {
-                    request.Request.Normalize();
-                    RequestSecrets.UnprotectInPlace(request.Request);
-                    results.Add(request);
+                    var request = JsonSerializer.Deserialize<SavedRequest>(File.ReadAllText(file), JsonDefaults.Read);
+                    if (request?.Request != null)
+                    {
+                        request.Request.Normalize();
+                        RequestSecrets.UnprotectInPlace(request.Request);
+                        results.Add(request);
+                    }
                 }
-            }
-            catch
-            {
-                // Skip corrupt files
-            }
-        }
+                catch
+                {
+                    // Skip corrupt files
+                }
+            });
 
         return results.OrderByDescending(r => r.ModifiedAt).ToList();
     }
@@ -87,13 +70,7 @@ public class SavedRequestService
             File.Delete(filePath);
     }
 
-    // ==================== Autosave ====================
-
-    public async Task SaveAutosaveAsync(SavedRequest request)
-    {
-        var json = JsonSerializer.Serialize(BuildEncryptedCopy(request), JsonOptions);
-        await AtomicFile.WriteAllTextAsync(AutosaveFilePath, json);
-    }
+    // ==================== Legacy autosave ====================
 
     public async Task<SavedRequest?> LoadAutosaveAsync()
     {
@@ -103,7 +80,7 @@ public class SavedRequestService
         try
         {
             var json = await File.ReadAllTextAsync(AutosaveFilePath);
-            var request = JsonSerializer.Deserialize<SavedRequest>(json, ReadOptions);
+            var request = JsonSerializer.Deserialize<SavedRequest>(json, JsonDefaults.Read);
             if (request?.Request is null)
                 return null;
 

@@ -43,9 +43,11 @@ public enum RequestPhase
     ReadResponse
 }
 
+// Older settings.json files store these as numbers: append new members, never reorder.
 public enum CurlExportStyle
 {
-    Bash,       // curl, \ continuation, '\'' escaping (Linux / macOS / Git Bash)
-    PowerShell, // curl.exe, ` continuation, '' escaping (Windows PowerShell)
-    Cmd         // curl, ^ continuation, "..." with \" escaping (Windows cmd.exe)
+    Bash,             // curl, \ continuation, '\'' escaping (Linux / macOS / Git Bash)
+    PowerShell,       // curl.exe, ` continuation, '' escaping (PowerShell 7.3+)
+    Cmd,              // curl, ^ continuation, "..." with "" escaping (Windows cmd.exe)
+    WindowsPowerShell // like PowerShell, plus \" pre-escaping for Windows PowerShell 5.1
 }

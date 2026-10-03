@@ -14,7 +14,7 @@
         Background="{DynamicResource BgDeep}"
         Foreground="{DynamicResource TextPrimary}"
         WindowStyle="None"
-        Icon="app.ico"
+        Icon="images/app.ico"
         WindowStartupLocation="CenterScreen"
         d:DataContext="{d:DesignInstance Type=vm:MainViewModel}">
 
@@ -51,7 +51,7 @@
 
                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
                                 Margin="16,0,0,0">
-                        <Image Source="app.ico" Width="18" Height="18" Margin="0,0,8,0"
+                        <Image Source="images/app.ico" Width="18" Height="18" Margin="0,0,8,0"
                                VerticalAlignment="Center" SnapsToDevicePixels="True"
                                RenderOptions.BitmapScalingMode="HighQuality"/>
                         <TextBlock Text="PayloadPanda" FontSize="16" FontWeight="SemiBold"
@@ -169,14 +169,13 @@
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
 
-                                                <Border Grid.Row="0" Grid.Column="0"
-                                                        CornerRadius="3" Padding="5,1" Margin="0,0,6,0"
-                                                        VerticalAlignment="Center"
-                                                        Background="{Binding Request.Method, Converter={StaticResource MethodToBrush}}"
-                                                        Opacity="0.2">
-                                                    <TextBlock Text="{Binding Request.Method}" FontSize="9" FontWeight="Bold"
+                                                <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,6,0" VerticalAlignment="Center">
+                                                    <!-- Tinted backdrop: the opacity sits on its own layer so it doesn't fade the label too. -->
+                                                    <Border CornerRadius="3" Opacity="0.2"
+                                                            Background="{Binding Request.Method, Converter={StaticResource MethodToBrush}}"/>
+                                                    <TextBlock Text="{Binding Request.Method}" FontSize="9" FontWeight="Bold" Margin="5,1"
                                                                Foreground="{Binding Request.Method, Converter={StaticResource MethodToBrush}}"/>
-                                                </Border>
+                                                </Grid>
 
                                                 <TextBlock Grid.Row="0" Grid.Column="1"
                                                            Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
@@ -213,10 +212,12 @@
                                             </Grid>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
+                                    <!-- A single click on an item opens it (see the item template); no
+                                         list-level double-click binding, which would open it a second time. -->
                                     <ListBox.InputBindings>
-                                        <MouseBinding MouseAction="LeftDoubleClick"
-                                                      Command="{Binding LoadSavedRequestCommand}"
-                                                      CommandParameter="{Binding SelectedSavedRequest}"/>
+                                        <KeyBinding Key="Return"
+                                                    Command="{Binding LoadSavedRequestCommand}"
+                                                    CommandParameter="{Binding SelectedSavedRequest}"/>
                                     </ListBox.InputBindings>
                                 </ListBox>
 
@@ -266,14 +267,13 @@
                                                     <ColumnDefinition Width="*"/>
                                                 </Grid.ColumnDefinitions>
 
-                                                <Border Grid.Row="0" Grid.Column="0"
-                                                        CornerRadius="3" Padding="5,1" Margin="0,0,6,0"
-                                                        VerticalAlignment="Center"
-                                                        Background="{Binding Method, Converter={StaticResource MethodToBrush}}"
-                                                        Opacity="0.2">
-                                                    <TextBlock Text="{Binding Method}" FontSize="9" FontWeight="Bold"
+                                                <Grid Grid.Row="0" Grid.Column="0" Margin="0,0,6,0" VerticalAlignment="Center">
+                                                    <!-- Tinted backdrop: the opacity sits on its own layer so it doesn't fade the label too. -->
+                                                    <Border CornerRadius="3" Opacity="0.2"
+                                                            Background="{Binding Method, Converter={StaticResource MethodToBrush}}"/>
+                                                    <TextBlock Text="{Binding Method}" FontSize="9" FontWeight="Bold" Margin="5,1"
                                                                Foreground="{Binding Method, Converter={StaticResource MethodToBrush}}"/>
-                                                </Border>
+                                                </Grid>
 
                                                 <TextBlock Grid.Row="0" Grid.Column="1"
                                                            Text="{Binding Url}" FontSize="12"

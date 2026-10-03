@@ -8,22 +8,20 @@
     <UseWPF>true</UseWPF>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationIcon>images\app.ico</ApplicationIcon>
+    <!-- The test project lives in a subfolder; keep its sources out of the app's globs. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);PayloadPanda.Tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="app.ico" />
+    <!-- Window/title-bar icon, referenced from XAML as images/app.ico. -->
+    <Resource Include="images\app.ico" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="app.ico">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.*" />
-    <PackageReference Include="AvalonEdit" Version="6.*" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.*" />
+    <!-- Exact versions so every build (local and CI) resolves the same packages. -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.17" />
   </ItemGroup>
 
 </Project>

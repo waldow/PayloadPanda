@@ -33,6 +33,9 @@ jobs:
     - name: Build
       run: dotnet build PayloadPanda.sln --configuration ${{ matrix.configuration }} --no-restore
 
+    - name: Test
+      run: dotnet test PayloadPanda.Tests/PayloadPanda.Tests.csproj --configuration ${{ matrix.configuration }} --no-build
+
     - name: Publish
       if: matrix.configuration == 'Release'
       run: dotnet publish PayloadPanda.csproj --configuration Release --output publish --no-restore

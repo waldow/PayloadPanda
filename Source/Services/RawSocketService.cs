@@ -7,7 +7,6 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using System.Web;
 using PayloadPanda.Models;
 
 namespace PayloadPanda.Services;
@@ -22,7 +21,6 @@ namespace PayloadPanda.Services;
 public class RawSocketService
 {
     private const int ReadBufferSize = 16 * 1024;
-    private const long MaxResponseBytes = 64L * 1024 * 1024; // guard against runaway responses
 
     public bool SslVerification { get; set; } = true;
 
@@ -35,30 +33,35 @@ public class RawSocketService
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds, 1, 300)));
         var token = timeoutCts.Token;
 
-        Uri uri;
+        ComposedRequest composed;
         try
         {
-            uri = BuildUri(request);
+            composed = RequestComposer.Compose(request, includeClientDefaults: true);
         }
         catch (Exception ex)
         {
             diag.FailedPhase = RequestPhase.Dns;
             diag.ErrorMessage = ex.Message;
-            throw new RawSocketException($"Invalid URL: {ex.Message}", diag, ex);
+            throw new RawSocketException($"Invalid request: {ex.Message}", diag, ex);
         }
 
-        diag.Scheme = uri.Scheme;
-        diag.Host = uri.Host;
+        var uri = composed.Uri;
         var useSsl = string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase);
+        // IdnHost is the punycode form for internationalized names (what DNS, SNI and the
+        // Host header need) and drops the brackets from IPv6 literals.
+        var host = uri.IdnHost;
+        diag.Scheme = uri.Scheme;
+        diag.Host = host;
         diag.Port = uri.IsDefaultPort ? (useSsl ? 443 : 80) : uri.Port;
 
         var totalSw = Stopwatch.StartNew();
+        SslStream? ssl = null;
         try
         {
             // ---- DNS ----
             phase = RequestPhase.Dns;
             var dnsSw = Stopwatch.StartNew();
-            var addresses = await Dns.GetHostAddressesAsync(uri.Host, token);
+            var addresses = await Dns.GetHostAddressesAsync(host, token).ConfigureAwait(false);
             dnsSw.Stop();
             diag.Timings.DnsMs = dnsSw.Elapsed.TotalMilliseconds;
             diag.ResolvedIpAddresses = addresses.Select(a => a.ToString()).ToList();
@@ -69,7 +72,7 @@ public class RawSocketService
             phase = RequestPhase.TcpConnect;
             using var client = new TcpClient();
             var tcpSw = Stopwatch.StartNew();
-            await client.ConnectAsync(addresses, diag.Port, token);
+            await client.ConnectAsync(addresses, diag.Port, token).ConfigureAwait(false);
             tcpSw.Stop();
             diag.Timings.TcpConnectMs = tcpSw.Elapsed.TotalMilliseconds;
             diag.ChosenIpAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? string.Empty;
@@ -77,7 +80,6 @@ public class RawSocketService
             diag.RemoteEndpoint = client.Client.RemoteEndPoint?.ToString();
 
             Stream stream = client.GetStream();
-            SslStream? ssl = null;
 
             // ---- TLS handshake (https only) ----
             if (useSsl)
@@ -96,8 +98,8 @@ public class RawSocketService
                 var tlsSw = Stopwatch.StartNew();
                 await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
                 {
-                    TargetHost = uri.Host
-                }, token);
+                    TargetHost = host
+                }, token).ConfigureAwait(false);
                 tlsSw.Stop();
 
                 diag.Timings.TlsHandshakeMs = tlsSw.Elapsed.TotalMilliseconds;
@@ -113,25 +115,28 @@ public class RawSocketService
 
             // ---- build + send the raw request ----
             phase = RequestPhase.SendRequest;
-            var (headText, bodyBytes, display) = BuildRawRequest(request, uri, diag.Port, useSsl);
+            var (headBytes, display) = BuildRawRequest(composed, uri, diag.Port, useSsl);
             diag.RawRequest = display;
-            await stream.WriteAsync(Encoding.ASCII.GetBytes(headText), token);
-            if (bodyBytes.Length > 0)
-                await stream.WriteAsync(bodyBytes, token);
-            await stream.FlushAsync(token);
+            await stream.WriteAsync(headBytes, token).ConfigureAwait(false);
+            if (composed.Body.Length > 0)
+                await stream.WriteAsync(composed.Body, token).ConfigureAwait(false);
+            await stream.FlushAsync(token).ConfigureAwait(false);
+            var requestSentMs = totalSw.Elapsed.TotalMilliseconds;
 
             // ---- read the response ----
             phase = RequestPhase.ReadResponse;
-            var (rawBytes, ttfbMs) = await ReadAllAsync(stream, totalSw, token);
-            diag.Timings.TimeToFirstByteMs = ttfbMs;
+            var (rawBytes, firstByteMs, truncated) = await ReadAllAsync(stream, totalSw, token).ConfigureAwait(false);
+            // Time the server took to start answering once the request was out — a phase of
+            // its own, comparable with the DNS/TCP/TLS bars rather than a running total.
+            diag.Timings.TimeToFirstByteMs = Math.Max(0, firstByteMs - requestSentMs);
 
-            ssl?.Dispose();
             totalSw.Stop();
             diag.Timings.TotalMs = totalSw.Elapsed.TotalMilliseconds;
 
             var response = ParseResponse(rawBytes, diag);
             response.Duration = totalSw.Elapsed;
             response.Diagnostics = diag;
+            response.IsTruncated = truncated;
             return response;
         }
         catch (OperationCanceledException)
@@ -152,99 +157,52 @@ public class RawSocketService
             diag.ErrorMessage = ex.Message;
             throw new RawSocketException(DescribePhaseFailure(phase, ex), diag, ex);
         }
-    }
-
-    // ---- URL / request building ----
-
-    private static Uri BuildUri(RequestModel request)
-    {
-        var url = request.Url.Trim();
-        var enabledParams = request.QueryParams.Where(p => p.IsEnabled && !string.IsNullOrWhiteSpace(p.Key)).ToList();
-        if (enabledParams.Count == 0)
-            return new Uri(url);
-
-        var uriBuilder = new UriBuilder(url);
-        var query = HttpUtility.ParseQueryString(uriBuilder.Query);
-        foreach (var param in enabledParams)
-            query[param.Key] = param.Value;
-        uriBuilder.Query = query.ToString();
-        return uriBuilder.Uri;
-    }
-
-    private static (string head, byte[] body, string display) BuildRawRequest(
-        RequestModel request, Uri uri, int port, bool useSsl)
-    {
-        var method = request.Method.ToString();
-        var pathAndQuery = string.IsNullOrEmpty(uri.PathAndQuery) ? "/" : uri.PathAndQuery;
-
-        // Body (UTF-8) — gated identically to HttpService.
-        byte[] body = [];
-        string? contentType = null;
-        var hasBody = request.BodyMode != BodyMode.None
-                      && request.Method != HttpMethodType.GET
-                      && request.Method != HttpMethodType.HEAD
-                      && !string.IsNullOrEmpty(request.BodyText);
-        if (hasBody)
+        finally
         {
-            body = Encoding.UTF8.GetBytes(request.BodyText);
-            contentType = request.BodyMode switch
-            {
-                BodyMode.Json => "application/json",
-                BodyMode.Xml => "application/xml",
-                BodyMode.FormUrlEncoded => "application/x-www-form-urlencoded",
-                _ => "text/plain"
-            };
+            ssl?.Dispose();
         }
+    }
 
+    // ---- request building ----
+
+    private static (byte[] head, string display) BuildRawRequest(
+        ComposedRequest composed, Uri uri, int port, bool useSsl)
+    {
+        var pathAndQuery = string.IsNullOrEmpty(uri.PathAndQuery) ? "/" : uri.PathAndQuery;
         var headers = new List<(string Key, string Value)>();
 
-        var isDefaultPort = (useSsl && port == 443) || (!useSsl && port == 80);
-        headers.Add(("Host", isDefaultPort ? uri.Host : $"{uri.Host}:{port}"));
-
-        bool hasUserAgent = false, hasAccept = false, hasContentType = false;
-        foreach (var h in request.Headers.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
+        // A Host row in the Headers grid wins (virtual-host testing), as it does in HttpClient.
+        var userHost = composed.GetHeader("Host");
+        if (userHost is null)
         {
-            headers.Add((h.Key, h.Value));
-            if (h.Key.Equals("User-Agent", StringComparison.OrdinalIgnoreCase)) hasUserAgent = true;
-            else if (h.Key.Equals("Accept", StringComparison.OrdinalIgnoreCase)) hasAccept = true;
-            else if (h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) hasContentType = true;
+            var hostName = uri.HostNameType == UriHostNameType.IPv6 ? $"[{uri.IdnHost}]" : uri.IdnHost;
+            var isDefaultPort = (useSsl && port == 443) || (!useSsl && port == 80);
+            headers.Add(("Host", isDefaultPort ? hostName : $"{hostName}:{port}"));
         }
 
-        switch (request.AuthMode)
+        foreach (var (key, value) in composed.Headers)
         {
-            case AuthMode.Bearer:
-                headers.Add(("Authorization", $"Bearer {request.AuthToken}"));
-                break;
-            case AuthMode.Basic:
-                var credentials = Convert.ToBase64String(
-                    Encoding.UTF8.GetBytes($"{request.AuthUsername}:{request.AuthPassword}"));
-                headers.Add(("Authorization", $"Basic {credentials}"));
-                break;
-            case AuthMode.ApiKey:
-                headers.Add((string.IsNullOrWhiteSpace(request.ApiKeyHeader) ? "X-API-Key" : request.ApiKeyHeader,
-                    request.ApiKeyValue));
-                break;
+            // The read loop relies on the connection closing, so ours is the only Connection header.
+            if (key.Equals("Connection", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (key.Equals("Host", StringComparison.OrdinalIgnoreCase))
+                headers.Insert(0, (key, value));
+            else
+                headers.Add((key, value));
         }
 
-        if (!hasUserAgent) headers.Add(("User-Agent", "PayloadPanda/1.0"));
-        if (!hasAccept) headers.Add(("Accept", "*/*"));
-        if (hasBody)
-        {
-            if (!hasContentType && contentType != null) headers.Add(("Content-Type", contentType));
-            headers.Add(("Content-Length", body.Length.ToString(CultureInfo.InvariantCulture)));
-        }
-        // Force a non-persistent connection so the read loop terminates on EOF.
+        if (composed.HasBody)
+            headers.Add(("Content-Length", composed.Body.Length.ToString(CultureInfo.InvariantCulture)));
         headers.Add(("Connection", "close"));
 
         var sb = new StringBuilder();
-        sb.Append($"{method} {pathAndQuery} HTTP/1.1\r\n");
+        sb.Append($"{composed.Method} {pathAndQuery} HTTP/1.1\r\n");
         foreach (var (key, value) in headers)
             sb.Append($"{key}: {value}\r\n");
         sb.Append("\r\n");
 
         var head = sb.ToString();
-        var display = hasBody ? head + request.BodyText : head;
-        return (head, body, display);
+        return (Encoding.UTF8.GetBytes(head), head + composed.BodyText);
     }
 
     // ---- TLS / certificate capture ----
@@ -301,86 +259,104 @@ public class RawSocketService
 
     // ---- response reading / parsing ----
 
-    private static async Task<(byte[] bytes, double ttfbMs)> ReadAllAsync(
+    private static async Task<(byte[] bytes, double firstByteMs, bool truncated)> ReadAllAsync(
         Stream stream, Stopwatch sw, CancellationToken token)
     {
         using var ms = new MemoryStream();
         var buffer = new byte[ReadBufferSize];
-        var ttfbMs = 0.0;
+        var firstByteMs = 0.0;
         var first = true;
         int read;
 
-        while ((read = await stream.ReadAsync(buffer, token)) > 0)
+        // The cap covers head + body, so a response that hits it is reported as truncated.
+        while ((read = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
         {
             if (first)
             {
-                ttfbMs = sw.Elapsed.TotalMilliseconds;
+                firstByteMs = sw.Elapsed.TotalMilliseconds;
                 first = false;
             }
             ms.Write(buffer, 0, read);
-            if (ms.Length > MaxResponseBytes)
-                break;
+            if (ms.Length > ResponseText.MaxBodyBytes)
+                return (ms.ToArray(), firstByteMs, true);
         }
 
-        return (ms.ToArray(), ttfbMs);
+        return (ms.ToArray(), firstByteMs, false);
     }
 
-    private static ResponseModel ParseResponse(byte[] raw, ConnectionDiagnostics diag)
+    internal static ResponseModel ParseResponse(byte[] raw, ConnectionDiagnostics diag)
     {
         var response = new ResponseModel();
+        var heads = new StringBuilder();
+        var offset = 0;
+        List<KeyValuePair<string, string>> headers;
 
-        var sep = IndexOfHeaderSeparator(raw);
-        var headBytes = sep >= 0 ? raw[..sep] : raw;
-        var bodyBytes = sep >= 0 ? raw[(sep + 4)..] : [];
-
-        var headText = Encoding.ASCII.GetString(headBytes);
-        diag.RawResponseHead = headText;
-
-        var lines = headText.Split("\r\n");
-        if (lines.Length > 0)
+        while (true)
         {
-            // e.g. "HTTP/1.1 200 OK"
-            var parts = lines[0].Split(' ', 3);
-            if (parts.Length >= 2 && int.TryParse(parts[1], out var code))
-            {
-                response.StatusCode = code;
-                response.ReasonPhrase = parts.Length >= 3 ? parts[2] : string.Empty;
-            }
+            var sep = IndexOfHeaderSeparator(raw, offset);
+            var headEnd = sep >= 0 ? sep : raw.Length;
+            var headText = Encoding.ASCII.GetString(raw, offset, headEnd - offset);
+            heads.Append(headText);
+            offset = sep >= 0 ? sep + 4 : raw.Length;
+
+            headers = ParseHead(headText, response);
+
+            // 1xx responses (100 Continue, 103 Early Hints) are interim: the real response
+            // follows on the same connection. 101 Switching Protocols is final.
+            var isInterim = response.StatusCode is >= 100 and < 200 && response.StatusCode != 101;
+            if (!isInterim || sep < 0)
+                break;
+            heads.Append("\r\n\r\n");
         }
 
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 1; i < lines.Length; i++)
-        {
-            var line = lines[i];
-            if (string.IsNullOrEmpty(line)) continue;
-            var idx = line.IndexOf(':');
-            if (idx <= 0) continue;
-            headers[line[..idx].Trim()] = line[(idx + 1)..].Trim();
-        }
+        diag.RawResponseHead = heads.ToString();
+        var bodyBytes = raw[offset..];
 
-        if (headers.TryGetValue("Transfer-Encoding", out var te) &&
-            te.Contains("chunked", StringComparison.OrdinalIgnoreCase))
-        {
+        var transferEncoding = ResponseModel.FindHeader(headers, "Transfer-Encoding");
+        if (transferEncoding?.Contains("chunked", StringComparison.OrdinalIgnoreCase) == true)
             bodyBytes = DecodeChunked(bodyBytes);
-        }
 
-        response.Headers = headers.ToDictionary(k => k.Key, v => v.Value);
+        response.Headers = headers;
+        response.ContentType = ResponseModel.FindHeader(headers, "Content-Type") ?? string.Empty;
         response.BodyBytes = bodyBytes;
-        response.Body = Encoding.UTF8.GetString(bodyBytes);
-        response.ContentType = headers.TryGetValue("Content-Type", out var ctv) ? ctv : string.Empty;
+        response.Body = ResponseText.Decode(bodyBytes, response.ContentType);
         response.ResponseSize = bodyBytes.Length;
         return response;
     }
 
-    private static int IndexOfHeaderSeparator(byte[] data)
+    private static List<KeyValuePair<string, string>> ParseHead(string headText, ResponseModel response)
     {
-        for (var i = 0; i + 3 < data.Length; i++)
+        var lines = headText.Split("\r\n");
+
+        // e.g. "HTTP/1.1 200 OK"
+        var parts = lines[0].Split(' ', 3);
+        if (parts.Length >= 2 && int.TryParse(parts[1], out var code))
+        {
+            response.StatusCode = code;
+            response.ReasonPhrase = parts.Length >= 3 ? parts[2] : string.Empty;
+        }
+
+        // Every header line is kept, so repeated fields (Set-Cookie, Vary) all survive.
+        var headers = new List<KeyValuePair<string, string>>();
+        for (var i = 1; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var idx = line.IndexOf(':');
+            if (idx <= 0) continue;
+            headers.Add(new(line[..idx].Trim(), line[(idx + 1)..].Trim()));
+        }
+        return headers;
+    }
+
+    private static int IndexOfHeaderSeparator(byte[] data, int start)
+    {
+        for (var i = start; i + 3 < data.Length; i++)
             if (data[i] == 13 && data[i + 1] == 10 && data[i + 2] == 13 && data[i + 3] == 10)
                 return i;
         return -1;
     }
 
-    private static byte[] DecodeChunked(byte[] body)
+    internal static byte[] DecodeChunked(byte[] body)
     {
         using var output = new MemoryStream();
         var pos = 0;

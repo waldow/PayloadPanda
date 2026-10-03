@@ -21,20 +21,33 @@ public static class SecretProtector
         return Prefix + Convert.ToBase64String(encrypted);
     }
 
+    // Returns string.Empty for a value this user/machine can't decrypt (e.g. a history
+    // file synced from another PC); use TryUnprotect to find out that happened.
     public static string? Unprotect(string? value)
     {
-        if (string.IsNullOrEmpty(value)) return value;
-        if (!value.StartsWith(Prefix, StringComparison.Ordinal)) return value;
+        TryUnprotect(value, out var plaintext);
+        return plaintext;
+    }
+
+    public static bool TryUnprotect(string? value, out string? plaintext)
+    {
+        if (string.IsNullOrEmpty(value) || !value.StartsWith(Prefix, StringComparison.Ordinal))
+        {
+            plaintext = value;
+            return true;
+        }
 
         try
         {
             var encrypted = Convert.FromBase64String(value[Prefix.Length..]);
             var bytes = ProtectedData.Unprotect(encrypted, optionalEntropy: null, DataProtectionScope.CurrentUser);
-            return Encoding.UTF8.GetString(bytes);
+            plaintext = Encoding.UTF8.GetString(bytes);
+            return true;
         }
-        catch
+        catch (Exception ex) when (ex is CryptographicException or FormatException or PlatformNotSupportedException)
         {
-            return string.Empty;
+            plaintext = string.Empty;
+            return false;
         }
     }
 }

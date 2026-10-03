@@ -4,8 +4,6 @@ using System.ComponentModel;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Text;
-using System.Text.Json;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -131,7 +129,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     private string _authPassword = string.Empty;
 
     [ObservableProperty]
-    private string _apiKeyHeader = "X-API-Key";
+    private string _apiKeyHeader = RequestComposer.DefaultApiKeyHeader;
 
     [ObservableProperty]
     private string _apiKeyValue = string.Empty;
@@ -238,6 +236,14 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     partial void OnIsDirtyChanged(bool value) => _owner.ScheduleTabSessionSave();
     partial void OnCurrentResponseChanged(ResponseModel? value) => DownloadResponseCommand.NotifyCanExecuteChanged();
 
+    // The Connection tab is hidden without diagnostics; leaving it selected would show its
+    // empty content with no tab header highlighted.
+    partial void OnHasDiagnosticsChanged(bool value)
+    {
+        if (!value && SelectedResponseTabIndex == ConnectionTabIndex)
+            SelectedResponseTabIndex = 0;
+    }
+
     public void ApplyEditorSettings(int fontSize, bool wordWrap)
     {
         EditorFontSize = fontSize;
@@ -264,7 +270,10 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         ActiveRequestName = draft.ActiveRequestName;
         SelectedRequestMode = draft.RequestMode;
         SelectedRequestTabIndex = Math.Max(0, draft.SelectedRequestTabIndex);
-        SelectedResponseTabIndex = Math.Max(0, draft.SelectedResponseTabIndex);
+        // Responses aren't persisted, so a restored tab has no diagnostics to show.
+        SelectedResponseTabIndex = draft.SelectedResponseTabIndex == ConnectionTabIndex
+            ? 0
+            : Math.Max(0, draft.SelectedResponseTabIndex);
         PopulateFromRequest(draft.Request);
         ClearResponse();
         IsDirty = draft.IsDirty;
@@ -287,11 +296,15 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         RefreshTitleAndSession();
     }
 
-    public void LoadRequestDraft(RequestModel request, string statusText, bool isDirty)
+    /// <param name="linkedSaved">
+    /// Saved request this draft belongs to (e.g. a history snapshot of it), so Save updates
+    /// that entry instead of creating a new one.
+    /// </param>
+    public void LoadRequestDraft(RequestModel request, string statusText, bool isDirty, SavedRequest? linkedSaved = null)
     {
         _suppressChangeNotifications = true;
-        ActiveSavedRequestId = null;
-        ActiveRequestName = string.Empty;
+        ActiveSavedRequestId = linkedSaved?.Id;
+        ActiveRequestName = linkedSaved?.Name ?? string.Empty;
         SelectedRequestMode = RequestMode.Http;
         PopulateFromRequest(request);
         ClearResponse();
@@ -318,7 +331,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         AuthToken = string.Empty;
         AuthUsername = string.Empty;
         AuthPassword = string.Empty;
-        ApiKeyHeader = "X-API-Key";
+        ApiKeyHeader = RequestComposer.DefaultApiKeyHeader;
         ApiKeyValue = string.Empty;
         RequestTimeoutSeconds = _owner.CurrentSettings.DefaultTimeoutSeconds;
         RequestFollowRedirects = _owner.CurrentSettings.DefaultFollowRedirects;
@@ -364,8 +377,19 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             return;
 
         var requestModel = BuildSendModel();
-        await RunRequestAsync(requestModel, persistAsSaved: true, isPreflight: false,
-            corsMethod: SelectedMethod.ToString(), corsRequestedHeaders: BuildCorsRequestedHeaders(requestModel));
+        string requestedHeaders;
+        try
+        {
+            requestedHeaders = BuildCorsRequestedHeaders(requestModel);
+        }
+        catch (FormatException ex)
+        {
+            StatusText = $"Error: {ex.Message}";
+            return;
+        }
+
+        await RunRequestAsync(requestModel, recordHistory: true, isPreflight: false,
+            corsMethod: SelectedMethod.ToString(), corsRequestedHeaders: requestedHeaders);
     }
 
     [RelayCommand]
@@ -385,15 +409,26 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             : CorsRequestMethod.Trim();
 
         var baseModel = BuildRequestModel();
-        var requestedHeaders = BuildCorsRequestedHeaders(baseModel, method);
+        string requestedHeaders;
+        try
+        {
+            requestedHeaders = BuildCorsRequestedHeaders(baseModel, method);
+        }
+        catch (FormatException ex)
+        {
+            StatusText = $"Error: {ex.Message}";
+            return;
+        }
         var requestModel = BuildPreflightModel(baseModel, method, requestedHeaders);
 
         // Preflight is a browser HTTP concept; always go through HttpService, never the raw socket.
-        await RunRequestAsync(requestModel, persistAsSaved: false, isPreflight: true,
+        await RunRequestAsync(requestModel, recordHistory: false, isPreflight: true,
             corsMethod: method, corsRequestedHeaders: requestedHeaders, forceHttp: true);
     }
 
-    private async Task RunRequestAsync(RequestModel requestModel, bool persistAsSaved, bool isPreflight,
+    // Sending never touches the saved-request library: the request is recorded in history
+    // and stays a draft (IsDirty) until the user saves it explicitly.
+    private async Task RunRequestAsync(RequestModel requestModel, bool recordHistory, bool isPreflight,
         string corsMethod, string corsRequestedHeaders, bool forceHttp = false)
     {
         // Send and Preflight are separate commands; without this guard they could
@@ -403,6 +438,10 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             StatusText = "A request is already running";
             return;
         }
+
+        // Snapshot before the await: the plain request (no injected Origin header), so
+        // history entries and their reloads stay clean.
+        var historyModel = recordHistory ? BuildRequestModel() : null;
 
         ClearResponse();
         IsLoading = true;
@@ -416,9 +455,12 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                 ? await _rawSocketService.SendAsync(requestModel, cts.Token)
                 : await _httpService.SendAsync(requestModel, cts.Token);
 
+            // Pretty-printing a large body is real work; keep it off the UI thread.
+            var prettyBody = await Task.Run(() => JsonDefaults.TryFormat(response.Body));
+
             CurrentResponse = response;
             RawResponseBody = response.Body;
-            ResponseBody = TryFormatJson(response.Body);
+            ResponseBody = prettyBody;
             ResponseHeaders = new ObservableCollection<KeyValuePair<string, string>>(response.Headers);
             SetDiagnostics(response.Diagnostics);
             if (response.Diagnostics != null)
@@ -432,32 +474,30 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             }
 
             StatusText = $"{response.StatusCode} {response.ReasonPhrase} - {response.Duration.TotalMilliseconds:F0}ms";
+            if (response.IsTruncated)
+                StatusText += $" - body truncated at {ResponseText.MaxBodyBytes / (1024 * 1024)} MB";
 
-            if (persistAsSaved)
+            if (historyModel != null)
             {
-                // Isolated so a disk failure here can't discard the response we already have.
+                // Isolated so a failure here can't discard the response we already have.
                 try
                 {
-                    // Persist the plain request (no injected Origin header) so saved/restored Headers stay clean.
-                    var persistModel = BuildRequestModel();
-                    var savedReq = await SaveRequestForSendAsync(persistModel);
                     _owner.AddHistoryItem(new HistoryItem
                     {
                         Timestamp = DateTime.Now,
-                        Method = SelectedMethod,
-                        Url = RequestUrl,
+                        Method = historyModel.Method,
+                        Url = historyModel.Url,
                         StatusCode = response.StatusCode,
                         Duration = response.Duration,
-                        RequestSnapshot = _persistenceService.SerializeRequest(persistModel),
-                        SavedRequestId = savedReq.Id,
-                        SavedRequestName = savedReq.Name
+                        RequestSnapshot = _persistenceService.SerializeRequest(historyModel),
+                        SavedRequestId = ActiveSavedRequestId,
+                        SavedRequestName = ActiveSavedRequestId.HasValue ? ActiveRequestName : null
                     });
-
-                    IsDirty = false;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    StatusText += " (failed to save to library)";
+                    ErrorLog.Write("Record history", ex);
+                    StatusText += " (not recorded in history)";
                 }
             }
         }
@@ -500,13 +540,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             return false;
         }
 
-        var url = RequestUrl.Trim();
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            url = "https://" + url;
-        }
-
+        var url = NormalizeUrl(RequestUrl);
         if (!Uri.TryCreate(url, UriKind.Absolute, out _))
         {
             StatusText = "Invalid URL";
@@ -515,6 +549,16 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
         RequestUrl = url;
         return true;
+    }
+
+    // A URL typed without a scheme is treated as https, both when sending and in cURL export.
+    private static string NormalizeUrl(string url)
+    {
+        url = url.Trim();
+        return url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+               url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? url
+            : "https://" + url;
     }
 
     private bool ValidateTimeout()
@@ -612,7 +656,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         try
         {
             await File.WriteAllBytesAsync(dialog.FileName, response.BodyBytes);
-            StatusText = $"Downloaded {Path.GetFileName(dialog.FileName)}";
+            StatusText = response.IsTruncated
+                ? $"Downloaded {Path.GetFileName(dialog.FileName)} (body was truncated at {ResponseText.MaxBodyBytes / (1024 * 1024)} MB)"
+                : $"Downloaded {Path.GetFileName(dialog.FileName)}";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -625,9 +671,32 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     [RelayCommand]
     public void CopyAsCurl()
     {
-        var curl = GenerateCurlCommand();
-        if (!string.IsNullOrEmpty(curl) && TrySetClipboard(curl))
-            StatusText = "Curl command copied to clipboard";
+        if (string.IsNullOrWhiteSpace(RequestUrl))
+        {
+            StatusText = "Please enter a URL";
+            return;
+        }
+
+        CurlExportResult result;
+        try
+        {
+            // Exactly what Send would put on the wire, including the CORS Origin header.
+            var model = BuildSendModel();
+            model.Url = NormalizeUrl(model.Url);
+            result = CurlExporter.Generate(model, _owner.CurrentSettings.CurlExportStyle);
+        }
+        catch (Exception ex) when (ex is UriFormatException or FormatException)
+        {
+            StatusText = $"Can't build curl command: {ex.Message}";
+            return;
+        }
+
+        if (TrySetClipboard(result.Command))
+        {
+            StatusText = result.Warning is null
+                ? "Curl command copied to clipboard"
+                : $"Curl command copied - note: {result.Warning}";
+        }
     }
 
     [RelayCommand]
@@ -640,11 +709,28 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             if (ActiveSavedRequestId.HasValue)
             {
                 var existing = _owner.SavedRequests.FirstOrDefault(r => r.Id == ActiveSavedRequestId.Value);
+                if (existing is null && !_owner.IsSavedLibraryLoaded)
+                {
+                    // The linked entry may simply not be loaded yet; saving now would create a duplicate.
+                    StatusText = "Saved requests are still loading - try again in a moment";
+                    return;
+                }
+
                 if (existing != null)
                 {
+                    var previous = existing.Request;
                     existing.Request = requestModel;
-                    existing.ModifiedAt = DateTime.Now;
-                    await _savedRequestService.SaveAsync(existing);
+                    try
+                    {
+                        await _savedRequestService.SaveAsync(existing);
+                    }
+                    catch
+                    {
+                        // Keep the library entry matching what's on disk.
+                        existing.Request = previous;
+                        throw;
+                    }
+
                     _owner.MoveSavedRequestToTop(existing);
                     ActiveRequestName = existing.Name;
                     IsDirty = false;
@@ -660,10 +746,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                 Request = requestModel
             };
 
+            // Only link the tab and list the entry once it's actually on disk.
+            await _savedRequestService.SaveAsync(saved);
             ActiveSavedRequestId = saved.Id;
             ActiveRequestName = saved.Name;
             _owner.SavedRequests.Insert(0, saved);
-            await _savedRequestService.SaveAsync(saved);
             IsDirty = false;
             StatusText = $"Saved \"{saved.Name}\"";
         }
@@ -793,51 +880,42 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             ?.Value.Trim() ?? string.Empty;
     }
 
+    // The Access-Control-Request-Headers a browser would send: every header of the request
+    // as composed for the wire (Headers rows, auth, effective Content-Type) that is neither
+    // CORS-safelisted nor controlled by the browser itself.
+    /// <exception cref="FormatException">A header or the URL is invalid.</exception>
     private string BuildCorsRequestedHeaders(RequestModel model, string? methodOverride = null)
     {
         if (!string.IsNullOrWhiteSpace(CorsRequestHeaders))
             return CorsRequestHeaders.Trim();
 
+        var composed = RequestComposer.Compose(model, includeClientDefaults: false, methodOverride);
         var headers = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var header in model.Headers.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
+        foreach (var (key, value) in composed.Headers)
         {
-            if (ShouldIgnoreForPreflightHeaderList(header.Key))
-                continue;
-
-            if (!IsCorsSafelistedHeader(header.Key, header.Value))
-                headers.Add(header.Key.Trim().ToLowerInvariant());
-        }
-
-        switch (model.AuthMode)
-        {
-            case AuthMode.Bearer:
-            case AuthMode.Basic:
-                headers.Add("authorization");
-                break;
-            case AuthMode.ApiKey:
-                headers.Add((string.IsNullOrWhiteSpace(model.ApiKeyHeader) ? "X-API-Key" : model.ApiKeyHeader)
-                    .Trim()
-                    .ToLowerInvariant());
-                break;
-        }
-
-        if (RequestUsesBody(model, methodOverride) &&
-            !IsCorsSafelistedContentType(GetBodyContentType(model.BodyMode)))
-        {
-            headers.Add("content-type");
+            if (!IsBrowserControlledHeader(key) && !IsCorsSafelistedHeader(key, value))
+                headers.Add(key.ToLowerInvariant());
         }
 
         return string.Join(", ", headers);
     }
 
-    private static bool ShouldIgnoreForPreflightHeaderList(string key)
+    // Headers page scripts can't set (the Fetch "forbidden request-header" names, plus
+    // User-Agent which browsers ignore), so they never appear in a preflight's list.
+    private static readonly HashSet<string> BrowserControlledHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Accept-Charset", "Accept-Encoding", "Connection", "Content-Length", "Cookie", "Cookie2",
+        "Date", "DNT", "Expect", "Host", "Keep-Alive", "Origin", "Referer", "Set-Cookie", "TE",
+        "Trailer", "Transfer-Encoding", "Upgrade", "User-Agent", "Via"
+    };
+
+    private static bool IsBrowserControlledHeader(string key)
     {
         key = key.Trim();
-        return key.Equals("Origin", StringComparison.OrdinalIgnoreCase) ||
-               key.Equals("Cookie", StringComparison.OrdinalIgnoreCase) ||
-               key.Equals("Host", StringComparison.OrdinalIgnoreCase) ||
-               key.Equals("User-Agent", StringComparison.OrdinalIgnoreCase) ||
-               key.StartsWith("Access-Control-Request-", StringComparison.OrdinalIgnoreCase);
+        return BrowserControlledHeaders.Contains(key) ||
+               key.StartsWith("Access-Control-Request-", StringComparison.OrdinalIgnoreCase) ||
+               key.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase) ||
+               key.StartsWith("Sec-", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsCorsSafelistedHeader(string key, string value)
@@ -860,67 +938,6 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         return contentType.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase) ||
                contentType.Equals("multipart/form-data", StringComparison.OrdinalIgnoreCase) ||
                contentType.Equals("text/plain", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool RequestUsesBody(RequestModel model, string? methodOverride)
-    {
-        var method = string.IsNullOrWhiteSpace(methodOverride)
-            ? model.Method.ToString()
-            : methodOverride.Trim();
-
-        return model.BodyMode != BodyMode.None &&
-               !method.Equals("GET", StringComparison.OrdinalIgnoreCase) &&
-               !method.Equals("HEAD", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string GetBodyContentType(BodyMode bodyMode) => bodyMode switch
-    {
-        BodyMode.Json => "application/json",
-        BodyMode.Xml => "application/xml",
-        BodyMode.FormUrlEncoded => "application/x-www-form-urlencoded",
-        BodyMode.Raw => "text/plain",
-        _ => string.Empty
-    };
-
-    private async Task<SavedRequest> SaveRequestForSendAsync(RequestModel requestModel)
-    {
-        SavedRequest savedReq;
-        if (ActiveSavedRequestId.HasValue)
-        {
-            var existing = _owner.SavedRequests.FirstOrDefault(r => r.Id == ActiveSavedRequestId.Value);
-            if (existing != null)
-            {
-                savedReq = existing;
-                savedReq.Request = requestModel;
-                savedReq.ModifiedAt = DateTime.Now;
-            }
-            else
-            {
-                savedReq = new SavedRequest
-                {
-                    Name = $"{SelectedMethod} {RequestUrl}",
-                    Request = requestModel
-                };
-                ActiveSavedRequestId = savedReq.Id;
-                ActiveRequestName = savedReq.Name;
-                _owner.SavedRequests.Insert(0, savedReq);
-            }
-        }
-        else
-        {
-            savedReq = new SavedRequest
-            {
-                Name = $"{SelectedMethod} {RequestUrl}",
-                Request = requestModel
-            };
-            ActiveSavedRequestId = savedReq.Id;
-            ActiveRequestName = savedReq.Name;
-            _owner.SavedRequests.Insert(0, savedReq);
-        }
-
-        await _savedRequestService.SaveAsync(savedReq);
-        _owner.MoveSavedRequestToTop(savedReq);
-        return savedReq;
     }
 
     private void PopulateFromRequest(RequestModel request)
@@ -946,7 +963,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         AuthToken = request.AuthToken;
         AuthUsername = request.AuthUsername;
         AuthPassword = request.AuthPassword;
-        ApiKeyHeader = string.IsNullOrWhiteSpace(request.ApiKeyHeader) ? "X-API-Key" : request.ApiKeyHeader;
+        ApiKeyHeader = string.IsNullOrWhiteSpace(request.ApiKeyHeader) ? RequestComposer.DefaultApiKeyHeader : request.ApiKeyHeader;
         ApiKeyValue = request.ApiKeyValue;
         RequestTimeoutSeconds = request.TimeoutSeconds is >= 1 and <= 300
             ? request.TimeoutSeconds
@@ -1000,91 +1017,6 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         return new ObservableCollection<TimingPhaseRow>(rows);
     }
 
-    private string GenerateCurlCommand()
-    {
-        var style = _owner.CurrentSettings.CurlExportStyle;
-
-        // PowerShell aliases `curl` to Invoke-WebRequest, so call curl.exe explicitly there.
-        var cmd = style == CurlExportStyle.PowerShell ? "curl.exe" : "curl";
-        var sb = new StringBuilder(cmd);
-
-        var cont = style switch
-        {
-            CurlExportStyle.PowerShell => "`",
-            CurlExportStyle.Cmd => "^",
-            _ => "\\"
-        };
-        var nl = $" {cont}\n  ";
-
-        // Wrap a value as a quoted literal, escaping embedded quotes per shell:
-        // Bash uses '\'' , PowerShell doubles single quotes ('') , cmd.exe wraps in
-        // double quotes and escapes inner ones as \".
-        string Q(string? value)
-        {
-            var v = value ?? string.Empty;
-            return style switch
-            {
-                CurlExportStyle.Cmd => $"\"{v.Replace("\"", "\\\"")}\"",
-                CurlExportStyle.PowerShell => $"'{v.Replace("'", "''")}'",
-                _ => $"'{v.Replace("'", "'\\''")}'"
-            };
-        }
-
-        if (SelectedMethod != HttpMethodType.GET)
-            sb.Append($" -X {SelectedMethod}");
-
-        if (RequestFollowRedirects)
-            sb.Append(" -L");
-
-        if (IsRequestTimeoutValid())
-            sb.Append($" --max-time {RequestTimeoutSeconds}");
-
-        sb.Append($" {Q(RequestUrl)}");
-
-        foreach (var h in RequestHeaders.Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key)))
-        {
-            if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin) &&
-                h.Key.Equals("Origin", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            sb.Append($"{nl}-H {Q($"{h.Key}: {h.Value}")}");
-        }
-
-        if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin))
-            sb.Append($"{nl}-H {Q($"Origin: {CorsOrigin.Trim()}")}");
-
-        switch (SelectedAuthMode)
-        {
-            case AuthMode.Bearer:
-                sb.Append($"{nl}-H {Q($"Authorization: Bearer {AuthToken}")}");
-                break;
-            case AuthMode.Basic:
-                sb.Append($"{nl}-u {Q($"{AuthUsername}:{AuthPassword}")}");
-                break;
-            case AuthMode.ApiKey:
-                var key = string.IsNullOrWhiteSpace(ApiKeyHeader) ? "X-API-Key" : ApiKeyHeader;
-                sb.Append($"{nl}-H {Q($"{key}: {ApiKeyValue}")}");
-                break;
-        }
-
-        if (SelectedBodyMode != BodyMode.None && !string.IsNullOrWhiteSpace(RequestBody))
-        {
-            var contentType = SelectedBodyMode switch
-            {
-                BodyMode.Json => "application/json",
-                BodyMode.Xml => "application/xml",
-                BodyMode.FormUrlEncoded => "application/x-www-form-urlencoded",
-                _ => "text/plain"
-            };
-            sb.Append($"{nl}-H {Q($"Content-Type: {contentType}")}");
-            sb.Append($"{nl}-d {Q(RequestBody)}");
-        }
-
-        return sb.ToString();
-    }
-
     private string GetResponseDownloadFileName(ResponseModel response)
     {
         var extension = GetDefaultExtension(response);
@@ -1106,7 +1038,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
     private static string GetContentDispositionFileName(ResponseModel response)
     {
-        if (!TryGetHeader(response, "Content-Disposition", out var contentDisposition))
+        if (response.GetHeader("Content-Disposition") is not { } contentDisposition)
             return string.Empty;
 
         if (ContentDispositionHeaderValue.TryParse(contentDisposition, out var parsed))
@@ -1162,8 +1094,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     private static string GetDefaultExtension(ResponseModel response)
     {
         var contentType = response.ContentType;
-        if (string.IsNullOrWhiteSpace(contentType) && TryGetHeader(response, "Content-Type", out var headerContentType))
-            contentType = headerContentType;
+        if (string.IsNullOrWhiteSpace(contentType))
+            contentType = response.GetHeader("Content-Type") ?? string.Empty;
 
         var mediaType = contentType.Split(';', 2)[0].Trim().ToLowerInvariant();
         return mediaType switch
@@ -1196,21 +1128,6 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         return $"{label} Files (*{extension})|*{extension}|All Files (*.*)|*.*";
     }
 
-    private static bool TryGetHeader(ResponseModel response, string headerName, out string value)
-    {
-        foreach (var header in response.Headers)
-        {
-            if (header.Key.Equals(headerName, StringComparison.OrdinalIgnoreCase))
-            {
-                value = header.Value;
-                return true;
-            }
-        }
-
-        value = string.Empty;
-        return false;
-    }
-
     private static string SanitizeFileName(string fileName)
     {
         var sanitized = TrimFileNameQuotes(fileName).Trim();
@@ -1240,22 +1157,6 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         }
 
         return string.Empty;
-    }
-
-    private static string TryFormatJson(string input)
-    {
-        if (string.IsNullOrWhiteSpace(input))
-            return input;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(input);
-            return JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
-        }
-        catch
-        {
-            return input;
-        }
     }
 
     private void MarkRequestChanged(bool refreshTitle = false)

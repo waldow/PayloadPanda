@@ -57,6 +57,21 @@ public class RequestModel
             param.Value ??= string.Empty;
         }
     }
+
+    // Deep copy. MemberwiseClone covers every string/value-type property; the two
+    // lists are the only reference-type state and are copied item by item. A new
+    // list-valued property must be added here too.
+    public RequestModel Clone()
+    {
+        var clone = (RequestModel)MemberwiseClone();
+        clone.Headers = Headers
+            .Select(h => new HeaderItemData { Key = h.Key, Value = h.Value, IsEnabled = h.IsEnabled })
+            .ToList();
+        clone.QueryParams = QueryParams
+            .Select(p => new QueryParamData { Key = p.Key, Value = p.Value, IsEnabled = p.IsEnabled })
+            .ToList();
+        return clone;
+    }
 }
 
 public class HeaderItemData
