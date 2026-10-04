@@ -117,9 +117,101 @@ public class TransportTests
         Assert.Contains("Host: virtual.example\r\n", request.Head);
     }
 
-    private sealed record ReceivedRequest(string Head, string Body)
+    // A file whose bytes include every value plus CRLF and "--" runs, which a broken
+    // multipart writer or reader would trip over.
+    private static byte[] TrickyFileBytes() =>
+        [.. Enumerable.Range(0, 256).Select(i => (byte)i), .. "\r\n--\r\n----PayloadPandaBoundary\r\n"u8.ToArray()];
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Multipart_uploads_arrive_byte_for_byte(bool rawSocket)
     {
+        using var files = new TempFiles();
+        var path = files.Create("blob é.bin", TrickyFileBytes());
+        await using var server = new LoopbackServer();
+        var received = server.RespondOnceAsync(CannedResponse);
+
+        var request = new RequestModel
+        {
+            Method = HttpMethodType.POST,
+            Url = server.BaseUrl + "/upload",
+            BodyMode = BodyMode.FormData,
+            FormFields =
+            [
+                new() { Key = "name", Value = "Ada Lovelace" },
+                new() { Key = "file", Kind = FormFieldKind.File, FilePath = path }
+            ]
+        };
+        var response = rawSocket
+            ? await new RawSocketService().SendAsync(request, CancellationToken.None)
+            : await new HttpService().SendAsync(request, CancellationToken.None);
+        var got = await received;
+
+        var contentType = got.Header("Content-Type")!;
+        Assert.StartsWith("multipart/form-data; boundary=----PayloadPandaBoundary", contentType);
+        var boundary = contentType[(contentType.IndexOf("boundary=", StringComparison.Ordinal) + 9)..];
+        var expected = RequestComposer.Compose(request, true, options: new ComposeOptions { Boundary = boundary }).Body.ToArray();
+        Assert.Equal(expected, got.BodyBytes);
+        Assert.Equal(expected.Length.ToString(), got.Header("Content-Length"));
+        Assert.Equal(200, response.StatusCode);
+
+        if (rawSocket)
+        {
+            Assert.Contains($"<file: blob é.bin, {TrickyFileBytes().Length} B, application/octet-stream>", response.Diagnostics!.RawRequest);
+            Assert.DoesNotContain("----PayloadPandaBoundary\r\n\r\n--", response.Diagnostics.RawRequest);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Binary_uploads_stream_the_whole_file(bool rawSocket)
+    {
+        using var files = new TempFiles();
+        var content = new byte[5 * 1024 * 1024];
+        new Random(42).NextBytes(content);
+        var path = files.Create("video.mp4", content);
+        await using var server = new LoopbackServer();
+        var received = server.RespondOnceAsync(CannedResponse);
+
+        var request = new RequestModel
+        {
+            Method = HttpMethodType.PUT,
+            Url = server.BaseUrl + "/bucket/video.mp4",
+            BodyMode = BodyMode.Binary,
+            BinaryFilePath = path
+        };
+        _ = rawSocket
+            ? await new RawSocketService().SendAsync(request, CancellationToken.None)
+            : await new HttpService().SendAsync(request, CancellationToken.None);
+        var got = await received;
+
+        Assert.Equal("video/mp4", got.Header("Content-Type"));
+        Assert.Equal(content.Length, got.BodyBytes.Length);
+        Assert.True(content.AsSpan().SequenceEqual(got.BodyBytes));
+    }
+
+    [Fact]
+    public async Task Raw_mode_reports_a_missing_body_file_as_a_file_problem_not_a_dns_failure()
+    {
+        var request = new RequestModel
+        {
+            Method = HttpMethodType.POST,
+            Url = "http://127.0.0.1:9/",
+            BodyMode = BodyMode.Binary,
+            BinaryFilePath = Path.Combine(Path.GetTempPath(), "pp-missing-" + Guid.NewGuid().ToString("N"))
+        };
+
+        await Assert.ThrowsAsync<BodyFileException>(() => new RawSocketService().SendAsync(request, CancellationToken.None));
+    }
+
+    private sealed record ReceivedRequest(string Head, byte[] BodyBytes)
+    {
+        public string Body => Encoding.UTF8.GetString(BodyBytes);
         public string[] HeadLines => Head.Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+        public string? Header(string name) => HeadLines
+            .FirstOrDefault(l => l.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase))?[(name.Length + 1)..].Trim();
     }
 
     private sealed class LoopbackServer : IAsyncDisposable
@@ -158,7 +250,7 @@ public class TransportTests
                 buffer.AddRange(chunk.AsSpan(0, read).ToArray());
             }
 
-            var body = Encoding.UTF8.GetString(buffer.GetRange(headEnd + 4, length).ToArray());
+            var body = buffer.GetRange(headEnd + 4, Math.Min(length, buffer.Count - headEnd - 4)).ToArray();
             await stream.WriteAsync(Encoding.ASCII.GetBytes(response));
             return new ReceivedRequest(head, body);
         }

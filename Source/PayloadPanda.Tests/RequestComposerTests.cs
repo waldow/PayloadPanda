@@ -73,7 +73,6 @@ public class RequestComposerTests
     [Theory]
     [InlineData(BodyMode.Json, "application/json")]
     [InlineData(BodyMode.Xml, "application/xml")]
-    [InlineData(BodyMode.FormUrlEncoded, "application/x-www-form-urlencoded")]
     [InlineData(BodyMode.Raw, "text/plain")]
     public void Body_mode_sets_the_default_content_type(BodyMode mode, string expected)
     {
@@ -86,7 +85,7 @@ public class RequestComposerTests
 
         Assert.True(composed.HasBody);
         Assert.Equal(expected, Header(composed, "Content-Type"));
-        Assert.Equal("x"u8.ToArray(), composed.Body);
+        Assert.Equal("x"u8.ToArray(), composed.Body.ToArray());
     }
 
     [Theory]
@@ -102,7 +101,7 @@ public class RequestComposerTests
         var composed = RequestComposer.Compose(request, includeClientDefaults: false);
 
         Assert.False(composed.HasBody);
-        Assert.Empty(composed.Body);
+        Assert.Equal(0, composed.Body.Length);
         Assert.Null(Header(composed, "Content-Type"));
     }
 

@@ -4,10 +4,10 @@ namespace PayloadPanda.Services;
 
 // Centralizes DPAPI handling for the sensitive parts of a RequestModel: the auth
 // fields (AuthToken, AuthPassword, ApiKeyValue) plus the values of well-known
-// credential headers and query parameters. Used by anything that persists a
+// credential headers, query parameters and text form fields. Used by anything that persists a
 // RequestModel to %AppData% (history, saved-request library, tab session).
 // File export/import bypass these helpers so shared JSON stays plaintext.
-// Secrets anywhere else — a body, or a query string typed into the URL — stay plain.
+// Secrets anywhere else — raw body text, or a query string typed into the URL — stay plain.
 public static class RequestSecrets
 {
     private static readonly HashSet<string> SensitiveHeaderNames = new(StringComparer.OrdinalIgnoreCase)
@@ -35,6 +35,9 @@ public static class RequestSecrets
             header.Value = SecretProtector.Protect(header.Value) ?? string.Empty;
         foreach (var param in clone.QueryParams.Where(p => IsSensitiveParamName(p.Key)))
             param.Value = SecretProtector.Protect(param.Value) ?? string.Empty;
+        // A form "password" field is as sensitive as a query parameter; file paths are never encrypted.
+        foreach (var field in clone.FormFields.Where(f => f.Kind == FormFieldKind.Text && IsSensitiveParamName(f.Key)))
+            field.Value = SecretProtector.Protect(field.Value) ?? string.Empty;
 
         return clone;
     }
@@ -53,6 +56,8 @@ public static class RequestSecrets
             header.Value = Unprotect(header.Value, ref ok);
         foreach (var param in request.QueryParams)
             param.Value = Unprotect(param.Value, ref ok);
+        foreach (var field in request.FormFields)
+            field.Value = Unprotect(field.Value, ref ok);
 
         return ok;
     }

@@ -33,17 +33,9 @@ public class RawSocketService
         timeoutCts.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(request.TimeoutSeconds, 1, 300)));
         var token = timeoutCts.Token;
 
-        ComposedRequest composed;
-        try
-        {
-            composed = RequestComposer.Compose(request, includeClientDefaults: true);
-        }
-        catch (Exception ex)
-        {
-            diag.FailedPhase = RequestPhase.Dns;
-            diag.ErrorMessage = ex.Message;
-            throw new RawSocketException($"Invalid request: {ex.Message}", diag, ex);
-        }
+        // Problems with the request itself (bad header, missing body file) aren't connection
+        // failures: let them surface as they are rather than as a failed DNS phase.
+        var composed = RequestComposer.Compose(request, includeClientDefaults: true);
 
         var uri = composed.Uri;
         var useSsl = string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase);
@@ -118,8 +110,7 @@ public class RawSocketService
             var (headBytes, display) = BuildRawRequest(composed, uri, diag.Port, useSsl);
             diag.RawRequest = display;
             await stream.WriteAsync(headBytes, token).ConfigureAwait(false);
-            if (composed.Body.Length > 0)
-                await stream.WriteAsync(composed.Body, token).ConfigureAwait(false);
+            await composed.Body.WriteToAsync(stream, token).ConfigureAwait(false);
             await stream.FlushAsync(token).ConfigureAwait(false);
             var requestSentMs = totalSw.Elapsed.TotalMilliseconds;
 
@@ -202,7 +193,8 @@ public class RawSocketService
         sb.Append("\r\n");
 
         var head = sb.ToString();
-        return (Encoding.UTF8.GetBytes(head), head + composed.BodyText);
+        // The display copy shows files as placeholders, never their bytes.
+        return (Encoding.UTF8.GetBytes(head), head + composed.BodyPreview);
     }
 
     // ---- TLS / certificate capture ----

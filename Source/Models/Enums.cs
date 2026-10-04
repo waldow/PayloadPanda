@@ -11,13 +11,22 @@ public enum HttpMethodType
     OPTIONS
 }
 
+// Older files store these as numbers: append new members, never reorder.
 public enum BodyMode
 {
     None,
     Raw,
     Json,
     Xml,
-    FormUrlEncoded
+    FormUrlEncoded,
+    FormData,   // multipart/form-data: text fields and files
+    Binary      // one file as the whole body
+}
+
+public enum FormFieldKind
+{
+    Text,
+    File
 }
 
 public enum AuthMode

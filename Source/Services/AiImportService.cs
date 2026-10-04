@@ -49,8 +49,10 @@ public class AiImportService
           "url": "https://...",
           "headers": [{"key": "Header-Name", "value": "header-value"}],
           "queryParams": [{"key": "param", "value": "value"}],
-          "bodyMode": "None|Raw|Json|Xml|FormUrlEncoded",
-          "bodyText": "request body content",
+          "bodyMode": "None|Raw|Json|Xml|FormUrlEncoded|FormData|Binary",
+          "bodyText": "request body content (Raw, Json, Xml)",
+          "formFields": [{"key": "field", "value": "text value", "type": "text|file", "filePath": "path if file", "contentType": "optional"}],
+          "binaryFilePath": "path of the file sent as the whole body if Binary",
           "authMode": "None|Bearer|Basic|ApiKey",
           "authToken": "token if Bearer",
           "authUsername": "username if Basic",
@@ -66,8 +68,10 @@ public class AiImportService
         - Extract query parameters from the URL into queryParams array AND remove them from the url field
         - Detect auth from headers: "Authorization: Bearer <token>" → authMode=Bearer, authToken=<token>; "Authorization: Basic <base64>" → decode to username:password; custom API key headers → authMode=ApiKey
         - Do NOT duplicate auth info in both headers and auth fields — if you extract auth, remove that header
-        - Detect body content type: JSON objects/arrays → bodyMode=Json; XML → bodyMode=Xml; key=value&key2=value2 → bodyMode=FormUrlEncoded; other → bodyMode=Raw
+        - Detect body content type: JSON objects/arrays → bodyMode=Json; XML → bodyMode=Xml; key=value&key2=value2 → bodyMode=FormUrlEncoded with one formFields entry per pair (decoded, type "text"); other → bodyMode=Raw
         - For curl commands: -X → method, -H → headers, -d/--data → body, -u → Basic auth, -L → followRedirects=true, --max-time → timeoutSeconds
+        - curl -F name=value or --form-string name=value → bodyMode=FormData with a "text" form field; -F name=@path (optionally ;type=T) → a "file" form field with filePath (and contentType); --data-urlencode name=value → bodyMode=FormUrlEncoded with a text field; --data-binary @path → bodyMode=Binary with binaryFilePath
+        - Never put form or file data in bodyText; use formFields or binaryFilePath
         - Keep placeholder tokens as-is (<token>, {{variable}}, :param) and add a warning about each placeholder found
         - If the input is ambiguous or incomplete, make reasonable defaults and add warnings explaining assumptions
         - If you cannot determine a URL, use an empty string and add a warning
@@ -208,21 +212,41 @@ public class AiImportService
             AuthPassword = dto.AuthPassword ?? string.Empty,
             ApiKeyHeader = dto.ApiKeyHeader ?? RequestComposer.DefaultApiKeyHeader,
             ApiKeyValue = dto.ApiKeyValue ?? string.Empty,
+            BinaryFilePath = dto.BinaryFilePath ?? string.Empty,
             TimeoutSeconds = dto.TimeoutSeconds ?? 30,
             FollowRedirects = dto.FollowRedirects ?? true
         };
 
-        // Parse method enum
-        if (Enum.TryParse<HttpMethodType>(dto.Method, true, out var method))
+        // Enum names only: TryParse alone would also accept numbers ("7") and flag lists.
+        if (TryParseName<HttpMethodType>(dto.Method, out var method))
             request.Method = method;
-
-        // Parse body mode enum
-        if (!string.IsNullOrEmpty(dto.BodyMode) && Enum.TryParse<BodyMode>(dto.BodyMode, true, out var bodyMode))
+        if (TryParseName<BodyMode>(dto.BodyMode, out var bodyMode))
             request.BodyMode = bodyMode;
-
-        // Parse auth mode enum
-        if (!string.IsNullOrEmpty(dto.AuthMode) && Enum.TryParse<AuthMode>(dto.AuthMode, true, out var authMode))
+        if (TryParseName<AuthMode>(dto.AuthMode, out var authMode))
             request.AuthMode = authMode;
+
+        if (dto.FormFields is { Count: > 0 })
+        {
+            request.FormFields = dto.FormFields
+                .Where(f => f is not null)
+                .Select(f => new FormFieldData
+                {
+                    Key = f.Key ?? string.Empty,
+                    Value = f.Value ?? string.Empty,
+                    Kind = string.Equals(f.Type, "file", StringComparison.OrdinalIgnoreCase) ? FormFieldKind.File : FormFieldKind.Text,
+                    FilePath = f.FilePath ?? string.Empty,
+                    ContentType = f.ContentType ?? string.Empty
+                })
+                .ToList();
+        }
+        else if (request.BodyMode == BodyMode.FormUrlEncoded && request.BodyText.Length > 0)
+        {
+            // A model that put the pairs in bodyText anyway: read them leniently here, since
+            // Normalize's strict (byte-exact) conversion would fall back to a raw body.
+            request.FormFields = FormUrlEncoding.Parse(request.BodyText)
+                .Select(p => new FormFieldData { Key = p.Key, Value = p.Value })
+                .ToList();
+        }
 
         // Convert headers
         if (dto.Headers is { Count: > 0 })
@@ -245,4 +269,8 @@ public class AiImportService
         request.Normalize();
         return request;
     }
+
+    private static bool TryParseName<TEnum>(string? value, out TEnum result) where TEnum : struct, Enum =>
+        Enum.TryParse(value, ignoreCase: true, out result) && Enum.IsDefined(result) &&
+        !string.IsNullOrWhiteSpace(value) && !char.IsDigit(value.Trim()[0]) && !value.Contains(',');
 }

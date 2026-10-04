@@ -48,7 +48,8 @@ public class HttpService
 
         using var httpRequest = new HttpRequestMessage(ToHttpMethod(composed.Method), composed.Uri);
 
-        HttpContent? content = composed.HasBody ? new ByteArrayContent(composed.Body) : null;
+        // The body streams from memory and files at send time; files aren't read before that.
+        HttpContent? content = composed.HasBody ? new WireBodyContent(composed.Body) : null;
         foreach (var (key, value) in composed.Headers)
         {
             if (httpRequest.Headers.TryAddWithoutValidation(key, value))
