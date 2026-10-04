@@ -12,6 +12,7 @@ Postman-lite, built natively in WPF on .NET 10 — no Electron, no account, no c
 <img src="Source/images/svgforicons.svg" alt="PayloadPanda panda icon" width="96" align="right" />
 
 - **Payloads with paws** — compose requests quickly without waking up a heavyweight client.
+- **Upload anything** — build multipart forms with text fields and files (drag them in from Explorer), send URL-encoded forms without hand-encoding, or PUT a single file as a binary body.
 - **Bamboo-simple storage** — saved requests, history, open tabs, and settings are plain local JSON.
 - **Curl tamer** — copy any request as a ready-to-run `curl` command for Bash, PowerShell or cmd.exe, quoting and all.
 - **AI import helper** — paste messy snippets and let the panda sort the payload from the leaves.
@@ -23,7 +24,11 @@ Postman-lite, built natively in WPF on .NET 10 — no Electron, no account, no c
 ### Request building
 - **All HTTP verbs** — `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`.
 - **Tabbed builder** for **Params**, **Headers**, **Auth**, and **Body** with per-row enable/disable checkboxes (toggle a header off without deleting it).
-- **Body modes**: None, Raw (text/plain), JSON, XML, Form-URL-Encoded — content-type is set automatically, and a `Content-Type` row in **Headers** overrides it (e.g. `application/vnd.api+json`). `GET`/`HEAD` never send a body.
+- **Body modes**: None, Text, JSON, XML, URL-encoded, Form-data and Binary, picked from a row of pills. Content-type is set automatically (and shown next to the pills); a `Content-Type` row in **Headers** overrides it, e.g. `application/vnd.api+json`. `GET`/`HEAD` never send a body, and the Body tab says so when one would be dropped.
+  - **URL-encoded**: a key/value grid; the app does the percent-encoding (exactly as browsers do) and shows the encoded body live. Older requests with a hand-typed body are converted to rows when that keeps the bytes identical, and otherwise stay as text with the same content-type.
+  - **Form-data** (`multipart/form-data`): text fields and files, one row per part, with an optional content-type per part (files default to one detected from the extension). Drop files from Explorer onto the list, or use **Choose files…**. The body is written the way browsers write it.
+  - **Binary**: one file sent as the whole body (e.g. a PUT to an S3 pre-signed URL), with its content-type detected from the file name.
+  - Files are streamed from disk while the request is sent (up to 1 GB), so large uploads don't freeze the app; a file that's missing is reported before anything is sent.
 - **Query params** from the **Params** grid are appended to the URL; a grid row replaces a same-named parameter typed into the URL, and repeated keys (`tag=a&tag=b`) are all sent.
 - **Sensible defaults** — `User-Agent: PayloadPanda/1.0` and `Accept: */*` unless you set your own.
 - **Auth modes**: None, Bearer token, Basic (username/password, base64-encoded), API Key (configurable header name, defaults to `X-API-Key`).
@@ -69,7 +74,7 @@ What you get on every raw send:
 - **The endpoint, demystified** — every resolved IP, the address actually connected to, and the local/remote socket endpoints.
 - **Full TLS detail** — negotiated protocol (e.g. TLS 1.3), the exact cipher suite, and the validation result.
 - **The certificate chain** — leaf + intermediates as cards, each with subject, issuer, validity window, SANs, signature algorithm, serial, and a green / amber / red badge (valid / expiring soon / expired).
-- **The bytes on the wire** — the exact raw request sent and the raw response head received (including any interim `100`/`103` responses).
+- **The bytes on the wire** — the exact raw request sent (uploaded files shown as `<file: name, size, type>` placeholders) and the raw response head received (including any interim `100`/`103` responses).
 - The familiar **Pretty / Raw / Headers** tabs still populate as usual, so you lose nothing by switching modes.
 
 Built for the curious and the stuck:
@@ -87,7 +92,7 @@ Built for the curious and the stuck:
 
 ### Import / export
 - **Import / export request as JSON** via standard file dialogs — share requests via git, Slack, or wherever.
-- **Copy as cURL** — turns the current request exactly as it would be sent (verb, URL with params, headers, auth, body, and CORS Origin when enabled) into a ready-to-paste `curl` command. Pick the shell in Settings: **Bash**, **PowerShell 7.3+**, **Windows PowerShell 5.1** or **cmd.exe** — each gets its own quoting, so quotes, `&`, `%`, `$` and backslashes survive the trip. cmd.exe can't carry line breaks, so multi-line JSON bodies are minified (other multi-line bodies get spaces, with a note in the status bar).
+- **Copy as cURL** — turns the current request exactly as it would be sent (verb, URL with params, headers, auth, body, and CORS Origin when enabled) into a ready-to-paste `curl` command. Form-data becomes `--form-string` / `-F name=@file;type=…`, binary bodies `--data-binary @file`, and URL-encoded forms `--data-raw` with the exact encoded body. Pick the shell in Settings: **Bash**, **PowerShell 7.3+**, **Windows PowerShell 5.1** or **cmd.exe** — each gets its own quoting, so quotes, `&`, `%`, `$` and backslashes survive the trip. cmd.exe can't carry line breaks, so multi-line JSON bodies are minified (other multi-line bodies get spaces, with a note in the status bar).
 - **AI Import** — paste a curl command, OpenAPI/Swagger snippet, code sample, or plain-English description, and let an LLM extract a structured request (method, URL, headers, query params, body, auth). Preview the parsed JSON before applying. Uses any OpenAI-compatible Chat Completions endpoint (note that the pasted text is sent to it), with configurable model (defaults include `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-5.2`, `gpt-5.4-nano`, `gpt-5.4-mini`).
 
 ### UI / UX
@@ -178,7 +183,7 @@ Architecture is plain MVVM with a Services layer. `MainViewModel` owns the tabs,
 | Settings | `%AppData%\PayloadPanda\settings.json` |
 | Error log | `%AppData%\PayloadPanda\errors.log` (unexpected errors, if any) |
 
-Everything is human-readable, indented JSON — easy to back up, diff, or check into a personal repo. The exception is credentials: auth fields, the values of well-known credential headers and query parameters (`Authorization`, `Cookie`, `*token*`, `api_key`, ...), and the AI API key are encrypted with Windows DPAPI for your user account. Secrets anywhere else (a request body, a query string typed into the URL) are stored as plain text. Exported request files are always plain text, so they can be shared.
+Everything is human-readable, indented JSON — easy to back up, diff, or check into a personal repo. The exception is credentials: auth fields, the values of well-known credential headers, query parameters and form fields (`Authorization`, `Cookie`, `*token*`, `api_key`, `password`, ...), and the AI API key are encrypted with Windows DPAPI for your user account. Secrets anywhere else (raw body text, a query string typed into the URL) are stored as plain text. Upload files are stored as paths (never their contents) and read again each time the request is sent. Exported request files are always plain text, so they can be shared.
 
 ## License
 

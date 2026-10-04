@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text;
 using PayloadPanda.Models;
 
@@ -19,8 +20,10 @@ public static class CurlExporter
     /// <exception cref="FormatException">A header is invalid.</exception>
     public static CurlExportResult Generate(RequestModel request, CurlExportStyle style)
     {
-        var composed = RequestComposer.Compose(request, includeClientDefaults: false);
-        string? warning = null;
+        // Describe: curl reads body files itself, so exporting never touches the file system
+        // beyond a cheap existence check for the warning.
+        var composed = RequestComposer.Compose(request, includeClientDefaults: false, options: ComposeOptions.Describe);
+        var warnings = new List<string>();
 
         var cmd = style is CurlExportStyle.PowerShell or CurlExportStyle.WindowsPowerShell ? "curl.exe" : "curl";
         var continuation = style switch
@@ -45,10 +48,15 @@ public static class CurlExporter
         sb.Append($" --max-time {Math.Clamp(request.TimeoutSeconds, 1, 300)}");
         sb.Append(' ').Append(Quote(composed.Uri.AbsoluteUri, style));
 
+        var isFormData = composed.HasBody && request.BodyMode == BodyMode.FormData;
         foreach (var (key, value) in composed.Headers)
         {
             // Basic auth reads better as -u user:pass; curl builds the same header from it.
             if (request.AuthMode == AuthMode.Basic && key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // With -F curl writes multipart/form-data and its own boundary.
+            if (isFormData && key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
                 continue;
 
             // "Name:" with nothing after it tells curl to remove the header; "Name;" sends it empty.
@@ -59,7 +67,15 @@ public static class CurlExporter
         if (request.AuthMode == AuthMode.Basic)
             sb.Append(nl).Append("-u ").Append(Quote($"{request.AuthUsername}:{request.AuthPassword}", style));
 
-        if (composed.HasBody && composed.BodyText.Length > 0)
+        if (isFormData)
+        {
+            AppendFormParts(sb, nl, composed.FormParts, style, warnings);
+        }
+        else if (composed.HasBody && request.BodyMode == BodyMode.Binary)
+        {
+            AppendBinaryBody(sb, nl, composed.BinaryFilePath, style, warnings);
+        }
+        else if (composed.HasBody && composed.BodyText.Length > 0)
         {
             var body = composed.BodyText;
             if (style == CurlExportStyle.Cmd && body.IndexOfAny(['\r', '\n']) >= 0)
@@ -72,7 +88,7 @@ public static class CurlExporter
                 else
                 {
                     body = body.ReplaceLineEndings(" ");
-                    warning = "cmd.exe can't carry line breaks, so they were replaced with spaces in the body";
+                    warnings.Add("cmd.exe can't carry line breaks, so they were replaced with spaces in the body");
                 }
             }
 
@@ -80,8 +96,88 @@ public static class CurlExporter
             sb.Append(nl).Append("--data-raw ").Append(Quote(body, style));
         }
 
-        return new CurlExportResult(sb.ToString(), warning);
+        return new CurlExportResult(sb.ToString(), warnings.Count == 0 ? null : string.Join("; ", warnings));
     }
+
+    // -F and --form-string, one argument per part, in order:
+    //  - text:            --form-string 'name=value'   (the value is literal: no @file, <file or ;type=)
+    //  - text with type:  -F 'name="value";type=T'    (quoting the value also disables @/<)
+    //  - file:            -F 'name=@path;type=T'      (always pass type= so curl doesn't guess differently)
+    // Inside curl's "..." only \\ and \" are escapes, so those are the only characters escaped.
+    private static void AppendFormParts(StringBuilder sb, string nl, IReadOnlyList<ComposedFormPart> parts,
+        CurlExportStyle style, List<string> warnings)
+    {
+        if (parts.Count == 0)
+            warnings.Add("the form has no fields, so curl sends no body");
+
+        foreach (var part in parts)
+        {
+            if (part.Name.Contains('='))
+            {
+                warnings.Add($"curl can't send the field \"{part.Name}\" because its name contains '='; it was left out");
+                continue;
+            }
+
+            string argument;
+            if (part.Kind == FormFieldKind.File)
+            {
+                if (string.IsNullOrWhiteSpace(part.FilePath))
+                {
+                    warnings.Add($"the field \"{part.Name}\" has no file chosen; it was left out");
+                    continue;
+                }
+                if (!File.Exists(part.FilePath))
+                    warnings.Add($"the file for \"{part.Name}\" wasn't found: {part.FilePath}");
+
+                argument = $"-F {Quote($"{part.Name}=@{CurlFormPath(part.FilePath)}{CurlTypeOption(part.ContentType!)}", style)}";
+            }
+            else
+            {
+                var value = part.Value;
+                if (style == CurlExportStyle.Cmd && value.IndexOfAny(['\r', '\n']) >= 0)
+                {
+                    value = value.ReplaceLineEndings(" ");
+                    warnings.Add($"cmd.exe can't carry line breaks, so they were replaced with spaces in \"{part.Name}\"");
+                }
+
+                argument = part.ContentType is null
+                    ? $"--form-string {Quote($"{part.Name}={value}", style)}"
+                    : $"-F {Quote($"{part.Name}={CurlQuoted(value)}{CurlTypeOption(part.ContentType)}", style)}";
+            }
+
+            sb.Append(nl).Append(argument);
+        }
+    }
+
+    private static void AppendBinaryBody(StringBuilder sb, string nl, string? path, CurlExportStyle style, List<string> warnings)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            warnings.Add("no body file is chosen, so curl sends no body");
+            return;
+        }
+        if (!File.Exists(path))
+            warnings.Add($"the body file wasn't found: {path}");
+
+        // --data-binary @file sends the file byte for byte (-d @file would strip newlines);
+        // a bare "-" would mean stdin, so make it a relative path.
+        var file = path == "-" ? "./-" : path;
+        sb.Append(nl).Append("--data-binary ").Append(Quote($"@{file}", style));
+    }
+
+    // A path is passed as is unless it contains a character curl's -F parser treats as
+    // syntax (; and , separate options and files, " starts a quoted name) or has
+    // surrounding spaces; then it's quoted, escaping \\ and " the way curl expects.
+    private static string CurlFormPath(string path) =>
+        path.IndexOfAny([';', ',', '"']) >= 0 || path != path.Trim() ? CurlQuoted(path) : path;
+
+    // A type containing ';' (e.g. "application/json; charset=utf-8") can't follow type=,
+    // so it's sent as an explicit part header instead.
+    private static string CurlTypeOption(string contentType) =>
+        contentType.Contains(';') ? $";headers={CurlQuoted($"Content-Type: {contentType}")}" : $";type={contentType}";
+
+    private static string CurlQuoted(string value) =>
+        $"\"{value.Replace("\\", "\\\\").Replace("\"", "\\\"")}\"";
 
     internal static string Quote(string value, CurlExportStyle style) => style switch
     {

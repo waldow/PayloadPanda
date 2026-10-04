@@ -19,6 +19,7 @@
             <converters:EnumMatchToBoolConverter x:Key="EnumMatchToBool"/>
             <converters:DiagnosticBrushConverter x:Key="DiagnosticBrush"/>
             <converters:CorsStatusToBrushConverter x:Key="CorsStatusToBrush"/>
+            <converters:EnumToVisibilityConverter x:Key="EnumToVisibility"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

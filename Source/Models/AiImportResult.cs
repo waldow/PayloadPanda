@@ -32,6 +32,12 @@ internal class AiImportResponseDto
     [JsonPropertyName("bodyText")]
     public string? BodyText { get; set; }
 
+    [JsonPropertyName("formFields")]
+    public List<AiFormFieldDto>? FormFields { get; set; }
+
+    [JsonPropertyName("binaryFilePath")]
+    public string? BinaryFilePath { get; set; }
+
     [JsonPropertyName("authMode")]
     public string? AuthMode { get; set; }
 
@@ -76,4 +82,22 @@ internal class AiQueryParamDto
 
     [JsonPropertyName("value")]
     public string Value { get; set; } = string.Empty;
+}
+
+internal class AiFormFieldDto
+{
+    [JsonPropertyName("key")]
+    public string Key { get; set; } = string.Empty;
+
+    [JsonPropertyName("value")]
+    public string Value { get; set; } = string.Empty;
+
+    [JsonPropertyName("type")]
+    public string? Type { get; set; }
+
+    [JsonPropertyName("filePath")]
+    public string? FilePath { get; set; }
+
+    [JsonPropertyName("contentType")]
+    public string? ContentType { get; set; }
 }

@@ -209,16 +209,70 @@
                 <Grid Margin="8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                        <Label Content="Body Type" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <ComboBox ItemsSource="{Binding AvailableBodyModes}"
-                                  SelectedItem="{Binding SelectedBodyMode}"
-                                  MinWidth="130"/>
-                    </StackPanel>
+
+                    <!-- Body type pills, and the Content-Type the body will go out with -->
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border CornerRadius="4" Padding="2" HorizontalAlignment="Left"
+                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                Background="{DynamicResource BgInput}">
+                            <StackPanel Orientation="Horizontal"
+                                        KeyboardNavigation.TabNavigation="Once"
+                                        KeyboardNavigation.DirectionalNavigation="Cycle"
+                                        AutomationProperties.Name="Body type">
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="None"
+                                             IsChecked="{Binding SelectedBodyMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=None}"/>
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="Text"
+                                             IsChecked="{Binding SelectedBodyMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=Raw}"/>
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="JSON"
+                                             IsChecked="{Binding SelectedBodyMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=Json}"/>
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="XML"
+                                             IsChecked="{Binding SelectedBodyMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=Xml}"/>
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="URL-encoded"
+                                             ToolTip="Key/value fields, sent as application/x-www-form-urlencoded (like a plain HTML form)"
+                                             IsChecked="{Binding SelectedBodyMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=FormUrlEncoded}"/>
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="Form-data"
+                                             ToolTip="Text fields and files, sent as multipart/form-data (like an HTML upload form)"
+                                             IsChecked="{Binding SelectedBodyMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=FormData}"/>
+                                <RadioButton Style="{StaticResource ModeTogglePill}" Content="Binary"
+                                             ToolTip="One file sent as the whole request body"
+                                             IsChecked="{Binding SelectedBodyMode, Converter={StaticResource EnumMatchToBool}, ConverterParameter=Binary}"/>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   FontSize="11" Foreground="{DynamicResource TextMuted}" Margin="12,0,2,0"
+                                   TextTrimming="CharacterEllipsis"
+                                   Visibility="{Binding EffectiveContentType, Converter={StaticResource NullToVisibility}}">
+                            <Run Text="Sent as"/>
+                            <Run Text="{Binding EffectiveContentType, Mode=OneWay}"
+                                 FontFamily="{DynamicResource CodeFont}" Foreground="{DynamicResource TextSecondary}"/>
+                        </TextBlock>
+                    </Grid>
+
+                    <!-- A body with GET/HEAD is dropped by every transport: say so instead of failing silently -->
+                    <Grid Grid.Row="1" Margin="0,0,0,8"
+                          Visibility="{Binding IsBodyIgnoredForMethod, Converter={StaticResource BoolToVisibility}}">
+                        <Border CornerRadius="4" Background="{DynamicResource AccentYellow}" Opacity="0.12"/>
+                        <Border CornerRadius="4" BorderBrush="{DynamicResource AccentYellow}" BorderThickness="1" Opacity="0.45"/>
+                        <TextBlock Text="{Binding BodyIgnoredText}" Foreground="{DynamicResource AccentYellow}"
+                                   FontSize="12" Margin="10,6" TextWrapping="Wrap"/>
+                    </Grid>
+
+                    <!-- None -->
+                    <TextBlock Grid.Row="2" Margin="2,6,0,0" FontSize="12"
+                               Foreground="{DynamicResource TextSecondary}"
+                               Text="No body is sent. Pick a body type above to add one."
+                               Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=None}"/>
+
+                    <!-- Text / JSON / XML: kept named and always present so the code-behind sync works -->
                     <avalonedit:TextEditor
-                        Grid.Row="1"
+                        Grid.Row="2"
                         x:Name="RequestBodyEditor"
                         FontFamily="{DynamicResource CodeFont}"
                         FontSize="{Binding EditorFontSize}"
@@ -228,7 +282,275 @@
                         WordWrap="{Binding EditorWordWrap}"
                         BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="1"
-                        LineNumbersForeground="{DynamicResource TextMuted}"/>
+                        LineNumbersForeground="{DynamicResource TextMuted}"
+                        Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter='Raw,Json,Xml'}"/>
+
+                    <!-- URL-encoded and form-data: one list of fields; file parts and boundaries only in form-data -->
+                    <Grid Grid.Row="2" x:Name="FormPartsPanel" Background="Transparent" AllowDrop="True"
+                          PreviewDragEnter="FilesDragOver" PreviewDragOver="FilesDragOver"
+                          PreviewDragLeave="FilesDragLeave" PreviewDrop="FilesDrop"
+                          Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter='FormUrlEncoded,FormData'}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Column headings, aligned with the row grid below -->
+                        <Grid Grid.Row="0" Margin="0,0,10,4" TextElement.Foreground="{DynamicResource TextSecondary}"
+                              TextElement.FontSize="11" TextElement.FontWeight="SemiBold">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="36"/>
+                                <ColumnDefinition Width="*" MinWidth="90"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="2*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="32"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="On" Margin="6,0,0,0"/>
+                            <TextBlock Grid.Column="1" Text="Key" Margin="4,0,0,0"/>
+                            <TextBlock Grid.Column="2" Text="Type" Width="84" Margin="4,0,0,0"
+                                       Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormData}"/>
+                            <TextBlock Grid.Column="3" Text="Value" Margin="4,0,0,0"/>
+                            <TextBlock Grid.Column="4" Text="Content type" Width="160" Margin="4,0,0,0"
+                                       Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormData}"/>
+                        </Grid>
+
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel>
+                                <ItemsControl ItemsSource="{Binding FormFields}" IsTabStop="False" Focusable="False">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <Grid MinHeight="34">
+                                                    <Grid.Style>
+                                                        <Style TargetType="Grid">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                                                                    <Setter Property="Opacity" Value="0.5"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Grid.Style>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="36"/>
+                                                        <ColumnDefinition Width="*" MinWidth="90"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="2*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="32"/>
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <CheckBox Grid.Column="0" IsChecked="{Binding IsEnabled}" Margin="6,0,0,0"
+                                                              VerticalAlignment="Center" AutomationProperties.Name="Send this field"/>
+
+                                                    <TextBox Grid.Column="1" Margin="2,3"
+                                                             Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}"
+                                                             AutomationProperties.Name="Field name"/>
+
+                                                    <ComboBox Grid.Column="2" Width="84" Margin="2,3"
+                                                              ItemsSource="{Binding DataContext.FormFieldKinds, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                              SelectedItem="{Binding Kind}"
+                                                              AutomationProperties.Name="Field type"
+                                                              Visibility="{Binding DataContext.SelectedBodyMode, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormData}"/>
+
+                                                    <!-- Value: a text box, or a file chip for file fields -->
+                                                    <Grid Grid.Column="3" Margin="2,3">
+                                                        <TextBox Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}"
+                                                                 AutomationProperties.Name="Field value"
+                                                                 Visibility="{Binding IsFile, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}"/>
+
+                                                        <Grid Visibility="{Binding IsFile, Converter={StaticResource BoolToVisibility}}">
+                                                            <!-- No file chosen yet -->
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                                                        Visibility="{Binding HasFile, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                                                                <Button Content="Choose file…" Style="{StaticResource GhostButton}"
+                                                                        Command="{Binding DataContext.ChooseFormFieldFileCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                                <TextBlock Text="or drop one onto this list" FontSize="11" Margin="6,0,0,0"
+                                                                           VerticalAlignment="Center" Foreground="{DynamicResource TextMuted}"/>
+                                                            </StackPanel>
+
+                                                            <!-- File chip -->
+                                                            <Border CornerRadius="4" Padding="4,2" BorderThickness="1"
+                                                                    BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource BgPanel}"
+                                                                    ToolTip="{Binding FilePath}"
+                                                                    Visibility="{Binding HasFile, Converter={StaticResource BoolToVisibility}}">
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto"/>
+                                                                        <ColumnDefinition Width="*"/>
+                                                                        <ColumnDefinition Width="Auto"/>
+                                                                        <ColumnDefinition Width="Auto"/>
+                                                                        <ColumnDefinition Width="Auto"/>
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <Grid Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0">
+                                                                        <Border CornerRadius="3" Background="{DynamicResource AccentPurple}" Opacity="0.18"/>
+                                                                        <TextBlock Text="{Binding ExtensionLabel}" FontSize="9" FontWeight="Bold"
+                                                                                   Foreground="{DynamicResource AccentPurple}" Margin="5,1"/>
+                                                                    </Grid>
+                                                                    <TextBlock Grid.Column="1" Text="{Binding FileName}" VerticalAlignment="Center"
+                                                                               FontFamily="{DynamicResource CodeFont}" FontSize="12"
+                                                                               Foreground="{DynamicResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                                                    <TextBlock Grid.Column="2" Text="{Binding FileSizeText}" VerticalAlignment="Center"
+                                                                               FontSize="11" Margin="8,0,0,0" Foreground="{DynamicResource TextMuted}"/>
+                                                                    <TextBlock Grid.Column="3" Text="missing" VerticalAlignment="Center"
+                                                                               FontSize="11" FontWeight="SemiBold" Margin="8,0,0,0"
+                                                                               Foreground="{DynamicResource AccentRed}"
+                                                                               Visibility="{Binding FileMissing, Converter={StaticResource BoolToVisibility}}"/>
+                                                                    <Button Grid.Column="4" Content="Change…" Style="{StaticResource GhostButton}"
+                                                                            Padding="6,1" Margin="6,0,0,0" FontSize="11"
+                                                                            Command="{Binding DataContext.ChooseFormFieldFileCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                </Grid>
+                                                            </Border>
+                                                        </Grid>
+                                                    </Grid>
+
+                                                    <!-- Per-part Content-Type; the placeholder shows what's sent when it's blank -->
+                                                    <Grid Grid.Column="4" Width="160" Margin="2,3"
+                                                          Visibility="{Binding DataContext.SelectedBodyMode, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormData}">
+                                                        <TextBox Text="{Binding ContentType, UpdateSourceTrigger=PropertyChanged}"
+                                                                 FontFamily="{DynamicResource CodeFont}" FontSize="11"
+                                                                 AutomationProperties.Name="Part content type"/>
+                                                        <TextBlock Text="{Binding ContentTypePlaceholder}" IsHitTestVisible="False"
+                                                                   FontFamily="{DynamicResource CodeFont}" FontSize="11"
+                                                                   Foreground="{DynamicResource TextMuted}" Margin="9,0,4,0"
+                                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                                   Visibility="{Binding ContentType, Converter={StaticResource NullToVisibility}, ConverterParameter=Invert}"/>
+                                                    </Grid>
+
+                                                    <Button Grid.Column="5" Content="✕" Style="{StaticResource GhostButton}"
+                                                            FontSize="10" Padding="4,2" ToolTip="Remove this field"
+                                                            AutomationProperties.Name="Remove field"
+                                                            Command="{Binding DataContext.RemoveFormFieldRowCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                            CommandParameter="{Binding}"/>
+                                                </Grid>
+
+                                                <!-- The multipart boundary between parts -->
+                                                <Line X1="0" X2="1" Stretch="Fill" StrokeThickness="1" StrokeDashArray="4 3"
+                                                      Stroke="{DynamicResource BorderBrush}" SnapsToDevicePixels="True" Margin="0,1"
+                                                      Visibility="{Binding DataContext.SelectedBodyMode, RelativeSource={RelativeSource AncestorType=UserControl}, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormData}"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <!-- URL-encoded: add a field -->
+                                <Button Content="+ Add field" Style="{StaticResource GhostButton}" HorizontalAlignment="Left"
+                                        Margin="0,6,0,0" Command="{Binding AddFormFieldRowCommand}"
+                                        Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormUrlEncoded}"/>
+
+                            </StackPanel>
+                        </ScrollViewer>
+
+                        <!-- Footer: the form-data summary, or the exact URL-encoded body -->
+                        <StackPanel Grid.Row="2" Margin="0,8,0,0">
+                            <!-- Form-data: the drop zone, always in view below the list -->
+                            <Grid MinHeight="46" Margin="0,0,0,8"
+                                  Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormData}">
+                                <Rectangle x:Name="FormDropOutline" RadiusX="6" RadiusY="6" StrokeThickness="1.5"
+                                           StrokeDashArray="4 3" Stroke="{DynamicResource BorderBrush}" Fill="Transparent"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12,6">
+                                    <TextBlock Text="Drop files here to add them" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource TextSecondary}" Margin="0,0,16,0"/>
+                                    <Button Content="Choose files…" Style="{StaticResource GhostButton}"
+                                            Command="{Binding ChooseFormFilesCommand}" Margin="0,0,4,0"/>
+                                    <Button Content="Add text field" Style="{StaticResource GhostButton}"
+                                            Command="{Binding AddFormFieldRowCommand}"/>
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="{Binding FormDataSummary}" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource TextSecondary}"
+                                       Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormData}"/>
+
+                            <StackPanel Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=FormUrlEncoded}">
+                                <TextBlock Text="Sent as" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4"/>
+                                <TextBox Text="{Binding UrlEncodedPreview, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                                         MaxHeight="96" VerticalScrollBarVisibility="Auto"
+                                         FontFamily="{DynamicResource CodeFont}" FontSize="12"
+                                         AutomationProperties.Name="Encoded body"
+                                         Visibility="{Binding UrlEncodedPreview, Converter={StaticResource NullToVisibility}}"/>
+                                <TextBlock Text="Nothing to send yet. Add a field with a name." FontSize="12"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           Visibility="{Binding UrlEncodedPreview, Converter={StaticResource NullToVisibility}, ConverterParameter=Invert}"/>
+                                <TextBlock Text="{Binding IgnoredFileFieldsText}" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"
+                                           Foreground="{DynamicResource AccentYellow}"
+                                           Visibility="{Binding IgnoredFileFieldsText, Converter={StaticResource NullToVisibility}}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Binary: one file as the whole body -->
+                    <Grid Grid.Row="2" x:Name="BinaryPanel" Background="Transparent" AllowDrop="True"
+                          PreviewDragEnter="FilesDragOver" PreviewDragOver="FilesDragOver"
+                          PreviewDragLeave="FilesDragLeave" PreviewDrop="FilesDrop"
+                          Visibility="{Binding SelectedBodyMode, Converter={StaticResource EnumToVisibility}, ConverterParameter=Binary}">
+                        <!-- Empty: a drop zone -->
+                        <Grid MinHeight="150" VerticalAlignment="Top"
+                              Visibility="{Binding BinaryHasFile, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                            <Rectangle RadiusX="6" RadiusY="6" StrokeThickness="1.5" StrokeDashArray="4 3"
+                                       Stroke="{DynamicResource BorderBrush}" Fill="Transparent"/>
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16">
+                                <TextBlock Text="Drop a file here, or choose one." FontSize="14" HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextPrimary}"/>
+                                <TextBlock Text="It's sent as the whole request body." FontSize="12" HorizontalAlignment="Center"
+                                           Foreground="{DynamicResource TextSecondary}" Margin="0,4,0,12"/>
+                                <Button Content="Choose file…" Style="{StaticResource GhostButton}" HorizontalAlignment="Center"
+                                        Command="{Binding ChooseBinaryFileCommand}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- File card -->
+                        <Border VerticalAlignment="Top" CornerRadius="6" Padding="16" BorderThickness="1"
+                                BorderBrush="{DynamicResource BorderBrush}" Background="{DynamicResource BgSurface}"
+                                Visibility="{Binding BinaryHasFile, Converter={StaticResource BoolToVisibility}}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid Width="52" Height="52" VerticalAlignment="Top" Margin="0,0,14,0">
+                                    <Border CornerRadius="6" Background="{DynamicResource AccentPurple}" Opacity="0.18"/>
+                                    <TextBlock Text="{Binding BinaryExtensionLabel}" FontSize="13" FontWeight="Bold"
+                                               Foreground="{DynamicResource AccentPurple}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding BinaryFileName}" FontSize="15" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimary}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="{Binding BinaryFilePath}" FontFamily="{DynamicResource CodeFont}" FontSize="11"
+                                               Foreground="{DynamicResource TextMuted}" TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding BinaryFilePath}" Margin="0,2,0,6"/>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding BinaryFileSizeText}" FontSize="12"
+                                                   Foreground="{DynamicResource TextSecondary}" Margin="0,0,14,0"/>
+                                        <TextBlock Text="This file doesn't exist any more." FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource AccentRed}" Margin="0,0,14,0"
+                                                   Visibility="{Binding BinaryFileMissing, Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock FontSize="12" Foreground="{DynamicResource TextSecondary}">
+                                            <Run Text="Content-Type"/>
+                                            <Run Text="{Binding BinaryContentType, Mode=OneWay}" FontFamily="{DynamicResource CodeFont}"
+                                                 Foreground="{DynamicResource TextPrimary}"/>
+                                            <Run Text="{Binding BinaryContentTypeSource, Mode=OneWay}" Foreground="{DynamicResource TextMuted}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                                    <Button Content="Change…" Style="{StaticResource GhostButton}" Margin="0,0,4,0"
+                                            Command="{Binding ChooseBinaryFileCommand}"/>
+                                    <Button Content="Remove" Style="{StaticResource GhostButton}"
+                                            Command="{Binding ClearBinaryFileCommand}"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <!-- Shown while files are dragged over the panel -->
+                        <Rectangle x:Name="BinaryDropOverlay" RadiusX="6" RadiusY="6" StrokeThickness="2" StrokeDashArray="4 3"
+                                   Stroke="{DynamicResource AccentBlue}" Fill="#1A58A6FF" IsHitTestVisible="False"
+                                   Visibility="Collapsed"/>
+                    </Grid>
                 </Grid>
             </TabItem>
 

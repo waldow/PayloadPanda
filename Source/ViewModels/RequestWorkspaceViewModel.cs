@@ -43,15 +43,17 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         _suppressChangeNotifications = true;
         RequestHeaders.CollectionChanged += OnCollectionChangedForWorkspace;
         QueryParams.CollectionChanged += OnCollectionChangedForWorkspace;
+        FormFields.CollectionChanged += OnCollectionChangedForWorkspace;
         RequestHeaders.Add(new HeaderItem());
         QueryParams.Add(new QueryParamItem());
+        FormFields.Add(new FormFieldItem());
         IsDirty = false;
         _suppressChangeNotifications = false;
     }
 
     public Guid Id { get; private set; } = Guid.NewGuid();
     public HttpMethodType[] AvailableMethods { get; } = Enum.GetValues<HttpMethodType>();
-    public BodyMode[] AvailableBodyModes { get; } = Enum.GetValues<BodyMode>();
+    public FormFieldKind[] FormFieldKinds { get; } = Enum.GetValues<FormFieldKind>();
     public AuthMode[] AvailableAuthModes { get; } = Enum.GetValues<AuthMode>();
 
     public string Title
@@ -99,7 +101,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         CurrentResponse is null &&
         !HasDiagnostics &&
         RequestHeaders.All(h => string.IsNullOrWhiteSpace(h.Key) && string.IsNullOrWhiteSpace(h.Value)) &&
-        QueryParams.All(p => string.IsNullOrWhiteSpace(p.Key) && string.IsNullOrWhiteSpace(p.Value));
+        QueryParams.All(p => string.IsNullOrWhiteSpace(p.Key) && string.IsNullOrWhiteSpace(p.Value)) &&
+        FormFields.All(f => f.IsBlank) &&
+        string.IsNullOrWhiteSpace(BinaryFilePath);
 
     [ObservableProperty]
     private HttpMethodType _selectedMethod = HttpMethodType.GET;
@@ -115,6 +119,13 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
     [ObservableProperty]
     private string _requestBody = string.Empty;
+
+    // URL-encoded and form-data rows (one list, so switching between the two keeps them).
+    public ObservableCollection<FormFieldItem> FormFields { get; } = [];
+
+    // The file sent as the whole body in Binary mode.
+    [ObservableProperty]
+    private string _binaryFilePath = string.Empty;
 
     [ObservableProperty]
     private AuthMode _selectedAuthMode = AuthMode.None;
@@ -215,6 +226,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     partial void OnSelectedMethodChanged(HttpMethodType value) => MarkRequestChanged(refreshTitle: true);
     partial void OnRequestUrlChanged(string value) => MarkRequestChanged(refreshTitle: true);
     partial void OnSelectedBodyModeChanged(BodyMode value) => MarkRequestChanged();
+    partial void OnBinaryFilePathChanged(string value)
+    {
+        RefreshBinaryFileInfo();
+        MarkRequestChanged();
+    }
     partial void OnRequestBodyChanged(string value) => MarkRequestChanged();
     partial void OnSelectedAuthModeChanged(AuthMode value) => MarkRequestChanged();
     partial void OnAuthTokenChanged(string value) => MarkRequestChanged();
@@ -325,6 +341,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         RequestHeaders.Add(new HeaderItem());
         QueryParams.Clear();
         QueryParams.Add(new QueryParamItem());
+        FormFields.Clear();
+        FormFields.Add(new FormFieldItem());
+        BinaryFilePath = string.Empty;
         SelectedBodyMode = BodyMode.None;
         RequestBody = string.Empty;
         SelectedAuthMode = AuthMode.None;
@@ -786,6 +805,238 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             QueryParams.Remove(item);
     }
 
+    // ==================== Body: form fields and files ====================
+
+    [RelayCommand]
+    private void AddFormFieldRow()
+    {
+        FormFields.Add(new FormFieldItem());
+    }
+
+    [RelayCommand]
+    private void RemoveFormFieldRow(FormFieldItem? item)
+    {
+        if (item is null)
+            return;
+
+        FormFields.Remove(item);
+        if (FormFields.Count == 0)
+            FormFields.Add(new FormFieldItem());
+    }
+
+    [RelayCommand]
+    private void ChooseFormFieldFile(FormFieldItem? item)
+    {
+        if (item is null || ChooseFiles("Choose a file to upload", multiselect: false) is not [var path])
+            return;
+
+        item.Kind = FormFieldKind.File;
+        item.FilePath = path;
+        if (string.IsNullOrWhiteSpace(item.Key))
+            item.Key = "file";
+    }
+
+    [RelayCommand]
+    private void ClearFormFieldFile(FormFieldItem? item)
+    {
+        if (item != null)
+            item.FilePath = string.Empty;
+    }
+
+    [RelayCommand]
+    private void ChooseFormFiles()
+    {
+        var paths = ChooseFiles("Choose files to upload", multiselect: true);
+        if (paths.Length > 0)
+            AddFilesToForm(paths);
+    }
+
+    [RelayCommand]
+    private void ChooseBinaryFile()
+    {
+        if (ChooseFiles("Choose the file to send as the body", multiselect: false) is [var path])
+            BinaryFilePath = path;
+    }
+
+    [RelayCommand]
+    private void ClearBinaryFile()
+    {
+        BinaryFilePath = string.Empty;
+    }
+
+    /// <summary>Files dropped from Explorer: form-data adds file fields; binary uses the first file.</summary>
+    public void AddDroppedFiles(IReadOnlyList<string> paths)
+    {
+        var files = paths.Where(File.Exists).ToList();
+        var skipped = paths.Count - files.Count;
+        var skippedNote = skipped == 0 ? string.Empty : $" ({skipped} folder{(skipped == 1 ? "" : "s")} skipped)";
+        if (files.Count == 0)
+        {
+            StatusText = "Folders can't be uploaded. Drop files instead.";
+            return;
+        }
+
+        if (SelectedBodyMode == BodyMode.Binary)
+        {
+            BinaryFilePath = files[0];
+            StatusText = files.Count == 1
+                ? $"Sending {Path.GetFileName(files[0])} as the body{skippedNote}"
+                : $"Sending {Path.GetFileName(files[0])} as the body; a binary body holds one file, so the other {files.Count - 1} were ignored{skippedNote}";
+            return;
+        }
+
+        AddFilesToForm(files);
+        StatusText = $"Added {files.Count} file{(files.Count == 1 ? "" : "s")} to the form{skippedNote}";
+    }
+
+    private void AddFilesToForm(IEnumerable<string> paths)
+    {
+        foreach (var path in paths)
+        {
+            // Fill the empty row at the end first, then append.
+            var row = FormFields.Count > 0 && FormFields[^1].IsBlank ? FormFields[^1] : null;
+            if (row is null)
+            {
+                row = new FormFieldItem();
+                FormFields.Add(row);
+            }
+
+            row.Key = "file";
+            row.Kind = FormFieldKind.File;
+            row.FilePath = path;
+        }
+    }
+
+    private static string[] ChooseFiles(string title, bool multiselect)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = title,
+            Filter = "All Files (*.*)|*.*",
+            Multiselect = multiselect,
+            CheckFileExists = true
+        };
+        return dialog.ShowDialog() == true ? dialog.FileNames : [];
+    }
+
+    // ---- What the Body tab shows about the current body ----
+
+    public bool IsBodyIgnoredForMethod =>
+        SelectedBodyMode != BodyMode.None && SelectedMethod is HttpMethodType.GET or HttpMethodType.HEAD;
+
+    public string BodyIgnoredText =>
+        $"{SelectedMethod} requests are sent without a body. Switch to POST, PUT or PATCH to send it.";
+
+    /// <summary>The Content-Type the body goes out with (as the composer decides it), or empty.</summary>
+    public string EffectiveContentType
+    {
+        get
+        {
+            if (SelectedBodyMode == BodyMode.None || IsBodyIgnoredForMethod)
+                return string.Empty;
+            if (SelectedBodyMode == BodyMode.FormData)
+                return "multipart/form-data";   // the boundary is generated per send
+            return ContentTypeHeaderRow()
+                   ?? (SelectedBodyMode == BodyMode.Binary
+                       ? MimeTypes.FromFileName(BinaryFilePath)
+                       : RequestComposer.DefaultContentType(SelectedBodyMode));
+        }
+    }
+
+    /// <summary>The URL-encoded body exactly as it will be sent (same code path as the composer).</summary>
+    public string UrlEncodedPreview => FormUrlEncoding.Serialize(RequestComposer.UrlEncodedPairs(new RequestModel
+    {
+        FormFields = FormFields.Select(f => f.ToData()).ToList()
+    }));
+
+    public string IgnoredFileFieldsText
+    {
+        get
+        {
+            var count = FormFields.Count(f => f.IsEnabled && f.IsFile && !string.IsNullOrWhiteSpace(f.Key));
+            return count switch
+            {
+                0 => string.Empty,
+                1 => "1 file field isn't sent with URL-encoded. Switch to Form-data to upload it.",
+                _ => $"{count} file fields aren't sent with URL-encoded. Switch to Form-data to upload them."
+            };
+        }
+    }
+
+    public string FormDataSummary
+    {
+        get
+        {
+            var sent = FormFields.Where(f => f.IsEnabled && !string.IsNullOrWhiteSpace(f.Key)).ToList();
+            var unnamed = FormFields.Count(f => f.IsEnabled && string.IsNullOrWhiteSpace(f.Key) && (f.HasFile || !string.IsNullOrWhiteSpace(f.Value)));
+            var files = sent.Where(f => f.IsFile).ToList();
+            var missing = files.Count(f => !f.HasFile || f.FileMissing);
+
+            var text = (sent.Count, files.Count) switch
+            {
+                (0, _) => "Nothing to send yet. Add a text field or drop files below.",
+                (var n, 0) => n == 1 ? "1 text field" : $"{n} text fields",
+                (var n, var f) when n == f => $"{Plural(f, "file")} ({ByteSize.Format(files.Sum(x => x.FileSize ?? 0))}{(f == 1 ? "" : " in total")})",
+                (var n, var f) => $"{Plural(n, "part")}, including {Plural(f, "file")} ({ByteSize.Format(files.Sum(x => x.FileSize ?? 0))})"
+            };
+            if (missing > 0)
+                text += missing == 1 ? ". 1 file is missing or not chosen" : $". {missing} files are missing or not chosen";
+            if (unnamed > 0)
+                text += unnamed == 1 ? ". 1 row has no name, so it isn't sent" : $". {unnamed} rows have no name, so they aren't sent";
+            return text;
+        }
+    }
+
+    public bool BinaryHasFile => !string.IsNullOrWhiteSpace(BinaryFilePath);
+    public string BinaryFileName => Path.GetFileName(BinaryFilePath);
+    public string BinaryExtensionLabel => FormFieldItem.ExtensionBadge(BinaryFilePath);
+    public bool BinaryFileMissing => BinaryHasFile && _binaryFileSize is null;
+    public string BinaryFileSizeText => _binaryFileSize is { } size ? ByteSize.Format(size) : string.Empty;
+
+    public string BinaryContentType => ContentTypeHeaderRow() ?? MimeTypes.FromFileName(BinaryFilePath);
+
+    public string BinaryContentTypeSource => ContentTypeHeaderRow() is null
+        ? "detected from the file name"
+        : "set in Headers";
+
+    private long? _binaryFileSize;
+
+    private void RefreshBinaryFileInfo()
+    {
+        try
+        {
+            var info = BinaryHasFile ? new FileInfo(BinaryFilePath) : null;
+            _binaryFileSize = info is { Exists: true } ? info.Length : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            _binaryFileSize = null;
+        }
+    }
+
+    private string? ContentTypeHeaderRow() =>
+        RequestHeaders.FirstOrDefault(h => h.IsEnabled && h.Key.Trim().Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+            ?.Value.Trim() is { Length: > 0 } value ? value : null;
+
+    private static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    private void RefreshBodySummaries()
+    {
+        OnPropertyChanged(nameof(IsBodyIgnoredForMethod));
+        OnPropertyChanged(nameof(BodyIgnoredText));
+        OnPropertyChanged(nameof(EffectiveContentType));
+        OnPropertyChanged(nameof(UrlEncodedPreview));
+        OnPropertyChanged(nameof(IgnoredFileFieldsText));
+        OnPropertyChanged(nameof(FormDataSummary));
+        OnPropertyChanged(nameof(BinaryHasFile));
+        OnPropertyChanged(nameof(BinaryFileName));
+        OnPropertyChanged(nameof(BinaryExtensionLabel));
+        OnPropertyChanged(nameof(BinaryFileMissing));
+        OnPropertyChanged(nameof(BinaryFileSizeText));
+        OnPropertyChanged(nameof(BinaryContentType));
+        OnPropertyChanged(nameof(BinaryContentTypeSource));
+    }
+
     public RequestModel BuildRequestModel()
     {
         return new RequestModel
@@ -802,6 +1053,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                 .ToList(),
             BodyMode = SelectedBodyMode,
             BodyText = RequestBody,
+            FormFields = FormFields
+                .Where(f => !string.IsNullOrWhiteSpace(f.Key) || f.HasFile)
+                .Select(f => f.ToData())
+                .ToList(),
+            BinaryFilePath = BinaryFilePath,
             AuthMode = SelectedAuthMode,
             AuthToken = AuthToken,
             AuthUsername = AuthUsername,
@@ -889,7 +1145,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         if (!string.IsNullOrWhiteSpace(CorsRequestHeaders))
             return CorsRequestHeaders.Trim();
 
-        var composed = RequestComposer.Compose(model, includeClientDefaults: false, methodOverride);
+        var composed = RequestComposer.Compose(model, includeClientDefaults: false, methodOverride, ComposeOptions.Describe);
         var headers = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in composed.Headers)
         {
@@ -956,6 +1212,13 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             QueryParams.Add(new QueryParamItem { Key = p.Key, Value = p.Value, IsEnabled = p.IsEnabled });
         if (QueryParams.Count == 0)
             QueryParams.Add(new QueryParamItem());
+
+        FormFields.Clear();
+        foreach (var field in request.FormFields)
+            FormFields.Add(FormFieldItem.FromData(field));
+        if (FormFields.Count == 0)
+            FormFields.Add(new FormFieldItem());
+        BinaryFilePath = request.BinaryFilePath;
 
         SelectedBodyMode = request.BodyMode;
         RequestBody = request.BodyText;
@@ -1164,6 +1427,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         if (_suppressChangeNotifications)
             return;
 
+        RefreshBodySummaries();
         IsDirty = true;
         if (refreshTitle)
             OnPropertyChanged(nameof(Title));
@@ -1181,6 +1445,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     private void RefreshTitleAndSession()
     {
         OnPropertyChanged(nameof(Title));
+        RefreshBodySummaries();
         _owner.ScheduleTabSessionSave();
     }
 
@@ -1209,6 +1474,14 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
     private void OnItemPropertyChangedForWorkspace(object? sender, PropertyChangedEventArgs e)
     {
+        // A form row's display-only properties (file size, missing flag, labels) change the
+        // summary but not the request, so they mustn't mark the tab as edited.
+        if (sender is FormFieldItem && e.PropertyName is { } name && !FormFieldItem.PersistedProperties.Contains(name))
+        {
+            RefreshBodySummaries();
+            return;
+        }
+
         MarkRequestChanged();
     }
 }
