@@ -50,7 +50,7 @@ public class SavedRequestService
                     if (request?.Request != null)
                     {
                         request.Request.Normalize();
-                        RequestSecrets.UnprotectInPlace(request.Request);
+                        request.SecretsUnreadable = !RequestSecrets.UnprotectInPlace(request.Request);
                         results.Add(request);
                     }
                 }
@@ -85,7 +85,7 @@ public class SavedRequestService
                 return null;
 
             request.Request.Normalize();
-            RequestSecrets.UnprotectInPlace(request.Request);
+            request.SecretsUnreadable = !RequestSecrets.UnprotectInPlace(request.Request);
             return request;
         }
         catch

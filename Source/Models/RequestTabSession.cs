@@ -16,4 +16,8 @@ public class RequestTabDraft
     public int SelectedResponseTabIndex { get; set; }
     public bool IsDirty { get; set; }
     public RequestModel Request { get; set; } = new();
+
+    /// <summary>Set on load when a stored secret couldn't be decrypted (left empty). Not persisted.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool SecretsUnreadable { get; set; }
 }

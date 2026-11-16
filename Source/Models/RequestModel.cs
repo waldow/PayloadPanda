@@ -4,6 +4,13 @@ namespace PayloadPanda.Models;
 
 public class RequestModel
 {
+    public const int CurrentFormatVersion = 1;
+
+    // 0 (absent from the file) marks a request written before URL-encoded bodies became
+    // form rows; Normalize migrates those once. Requests built by the app carry the
+    // current version, so their leftover BodyText is never mistaken for a legacy body.
+    public int FormatVersion { get; set; }
+
     public HttpMethodType Method { get; set; } = HttpMethodType.GET;
     public string Url { get; set; } = string.Empty;
     public List<HeaderItemData> Headers { get; set; } = [];
@@ -82,7 +89,11 @@ public class RequestModel
             if (!Enum.IsDefined(field.Kind)) field.Kind = FormFieldKind.Text;
         }
 
-        MigrateLegacyUrlEncodedBody();
+        if (FormatVersion < CurrentFormatVersion)
+        {
+            MigrateLegacyUrlEncodedBody();
+            FormatVersion = CurrentFormatVersion;
+        }
     }
 
     // URL-encoded bodies used to be hand-typed text in BodyText. Turn that text into

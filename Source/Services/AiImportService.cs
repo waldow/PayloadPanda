@@ -163,6 +163,9 @@ public class AiImportService
         if (dto.Warnings is { Count: > 0 })
             result.Warnings.AddRange(dto.Warnings);
 
+        if (FileUploadWarning(result.Request) is { } uploadWarning)
+            result.Warnings.Insert(0, uploadWarning);
+
         return result;
     }
 
@@ -268,6 +271,23 @@ public class AiImportService
 
         request.Normalize();
         return request;
+    }
+
+    // The imported text decides both where the request goes and which local files it reads,
+    // so pasted content could aim a private file at someone else's server. Name the files
+    // up front so they are checked before the request is sent.
+    internal static string? FileUploadWarning(RequestModel request)
+    {
+        var paths = request.FormFields
+            .Where(f => f.Kind == FormFieldKind.File && !string.IsNullOrWhiteSpace(f.FilePath))
+            .Select(f => f.FilePath)
+            .ToList();
+        if (!string.IsNullOrWhiteSpace(request.BinaryFilePath))
+            paths.Add(request.BinaryFilePath);
+
+        return paths.Count == 0
+            ? null
+            : $"This request uploads local files - check them before sending: {string.Join(", ", paths)}";
     }
 
     private static bool TryParseName<TEnum>(string? value, out TEnum result) where TEnum : struct, Enum =>

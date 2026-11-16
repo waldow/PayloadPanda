@@ -66,9 +66,16 @@ public partial class MainWindow : Window
         return IntPtr.Zero;
     }
 
-    private static void GetMinMaxInfo(IntPtr hwnd, IntPtr lParam)
+    private void GetMinMaxInfo(IntPtr hwnd, IntPtr lParam)
     {
         var mmi = Marshal.PtrToStructure<MINMAXINFO>(lParam);
+
+        // Marking the message handled keeps WPF from applying MinWidth/MinHeight itself,
+        // so set the minimum tracking size here (in device pixels).
+        var toDevice = HwndSource.FromHwnd(hwnd)?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
+        mmi.ptMinTrackSize.X = Math.Max(mmi.ptMinTrackSize.X, (int)Math.Ceiling(MinWidth * toDevice.M11));
+        mmi.ptMinTrackSize.Y = Math.Max(mmi.ptMinTrackSize.Y, (int)Math.Ceiling(MinHeight * toDevice.M22));
+
         var monitor = MonitorFromWindow(hwnd, 0x00000002); // MONITOR_DEFAULTTONEAREST
         if (monitor != IntPtr.Zero)
         {

@@ -58,10 +58,22 @@ public class CurlExporterTests
 
         var command = Bash(request);
 
-        Assert.Contains("-X POST", command);
+        // --data-raw already makes curl POST; -X POST would pin the method across redirects.
+        Assert.DoesNotContain("-X", command);
         Assert.Single(command.Split('\n'), line => line.Contains("Content-Type"));
         Assert.Contains("-H 'Content-Type: application/vnd.api+json'", command);
         Assert.Contains("--data-raw '@not-a-file'", command);
+    }
+
+    [Fact]
+    public void Method_is_spelled_out_when_no_body_argument_implies_it()
+    {
+        var emptyPost = Bash(new RequestModel { Method = HttpMethodType.POST, Url = "https://api.example.com/" });
+        var put = Post("{}");
+        put.Method = HttpMethodType.PUT;
+
+        Assert.Contains("-X POST", emptyPost);
+        Assert.Contains("-X PUT", Bash(put));
     }
 
     [Fact]

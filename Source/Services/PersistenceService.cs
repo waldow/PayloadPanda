@@ -58,6 +58,7 @@ public class PersistenceService
             var json = await File.ReadAllTextAsync(SettingsFilePath);
             var settings = JsonSerializer.Deserialize<SettingsModel>(json, JsonDefaults.Read) ?? new SettingsModel();
             settings.OpenAiApiKey = SecretProtector.Unprotect(settings.OpenAiApiKey);
+            settings.Normalize();
             return settings;
         }
         catch
@@ -154,6 +155,25 @@ public class PersistenceService
     {
         var protectedClone = RequestSecrets.ProtectClone(request);
         return JsonSerializer.Serialize(protectedClone, JsonDefaults.Write);
+    }
+
+    /// <summary>Body text beyond this many characters is left out of a history snapshot.</summary>
+    public const int MaxHistoryBodyChars = 256 * 1024;
+
+    /// <summary>
+    /// <see cref="SerializeRequest"/> for a history entry. The whole history file is read
+    /// and rewritten on every send, so a very large body text is left out of the snapshot
+    /// (<paramref name="bodyOmitted"/>) rather than stored once per send.
+    /// </summary>
+    public string SerializeHistorySnapshot(RequestModel request, out bool bodyOmitted)
+    {
+        bodyOmitted = request.BodyText.Length > MaxHistoryBodyChars;
+        if (bodyOmitted)
+        {
+            request = request.Clone();
+            request.BodyText = string.Empty;
+        }
+        return SerializeRequest(request);
     }
 
     /// <param name="secretsReadable">

@@ -1,4 +1,7 @@
+using System.IO;
 using System.Windows;
+using System.Windows.Interop;
+using PayloadPanda.Helpers;
 using PayloadPanda.Services;
 using PayloadPanda.ViewModels;
 
@@ -14,8 +17,25 @@ public partial class App : Application
     public static RequestTabSessionService RequestTabSessionService { get; } = new();
     public static MainViewModel MainViewModel { get; } = new(HttpService, RawSocketService, PersistenceService, AiImportService, SavedRequestService, RequestTabSessionService);
 
+    private SingleInstance? _singleInstance;
+
     protected override async void OnStartup(StartupEventArgs e)
     {
+        // One instance per data folder: a second one would overwrite the first's tabs.json.
+        _singleInstance = new SingleInstance(Path.GetFullPath(AppPaths.DataFolder));
+        if (!_singleInstance.IsFirst)
+        {
+            _singleInstance.SignalFirst();
+            StartupUri = null; // no window for this instance
+            Shutdown();
+            return;
+        }
+        _singleInstance.OnActivateRequested(() => Dispatcher.BeginInvoke(() =>
+        {
+            if (MainWindow is { } window)
+                SingleInstance.BringToFront(new WindowInteropHelper(window).Handle);
+        }));
+
         base.OnStartup(e);
 
         // Last-resort handlers: surface the error instead of tearing the app down,
@@ -66,7 +86,10 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        MainViewModel.SaveTabsSessionNowAsync().GetAwaiter().GetResult();
+        // An instance that handed over to an already running one has no session to save.
+        if (_singleInstance is { IsFirst: true })
+            MainViewModel.SaveTabsSessionNowAsync().GetAwaiter().GetResult();
+        _singleInstance?.Dispose();
         base.OnExit(e);
     }
 }

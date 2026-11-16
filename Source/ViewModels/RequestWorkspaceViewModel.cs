@@ -245,7 +245,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     partial void OnCorsRequestMethodChanged(string value) => MarkRequestChanged();
     partial void OnCorsRequestHeadersChanged(string value) => MarkRequestChanged();
     partial void OnCorsIncludeCredentialsChanged(bool value) => MarkRequestChanged();
-    partial void OnSelectedRequestModeChanged(RequestMode value) => MarkRequestChanged();
+    // The transport is kept with the tab, not with the request, so switching it isn't an edit.
+    partial void OnSelectedRequestModeChanged(RequestMode value) => MarkUiChanged();
     partial void OnSelectedRequestTabIndexChanged(int value) => MarkUiChanged();
     partial void OnSelectedResponseTabIndexChanged(int value) => MarkUiChanged();
     partial void OnActiveRequestNameChanged(string value) => OnPropertyChanged(nameof(Title));
@@ -293,7 +294,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         PopulateFromRequest(draft.Request);
         ClearResponse();
         IsDirty = draft.IsDirty;
-        StatusText = "Restored tab";
+        StatusText = draft.SecretsUnreadable ? $"Restored tab - {RequestSecrets.UnreadableNote}" : "Restored tab";
         _suppressChangeNotifications = false;
         RefreshTitleAndSession();
     }
@@ -306,7 +307,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         SelectedRequestMode = RequestMode.Http;
         PopulateFromRequest(saved.Request);
         ClearResponse();
-        StatusText = $"Loaded \"{saved.Name}\"";
+        StatusText = saved.SecretsUnreadable
+            ? $"Loaded \"{saved.Name}\" - {RequestSecrets.UnreadableNote}"
+            : $"Loaded \"{saved.Name}\"";
         IsDirty = false;
         _suppressChangeNotifications = false;
         RefreshTitleAndSession();
@@ -501,6 +504,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                 // Isolated so a failure here can't discard the response we already have.
                 try
                 {
+                    var snapshot = _persistenceService.SerializeHistorySnapshot(historyModel, out var bodyOmitted);
                     _owner.AddHistoryItem(new HistoryItem
                     {
                         Timestamp = DateTime.Now,
@@ -508,7 +512,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                         Url = historyModel.Url,
                         StatusCode = response.StatusCode,
                         Duration = response.Duration,
-                        RequestSnapshot = _persistenceService.SerializeRequest(historyModel),
+                        RequestSnapshot = snapshot,
+                        BodyOmitted = bodyOmitted,
                         SavedRequestId = ActiveSavedRequestId,
                         SavedRequestName = ActiveSavedRequestId.HasValue ? ActiveRequestName : null
                     });
@@ -522,7 +527,12 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         }
         catch (HttpRequestException ex)
         {
-            StatusText = $"Error: {ex.Message}";
+            // The outer message is often just "...see inner exception" (TLS failures in
+            // particular); the innermost one names the actual cause.
+            var cause = ex.GetBaseException().Message;
+            StatusText = ex.Message.Contains(cause, StringComparison.OrdinalIgnoreCase)
+                ? $"Error: {ex.Message}"
+                : $"Error: {ex.Message} {cause}";
             ClearResponse();
         }
         catch (OperationCanceledException)
@@ -750,6 +760,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                         throw;
                     }
 
+                    // The file now holds what the tab shows, so the load-time warning is spent.
+                    existing.SecretsUnreadable = false;
                     _owner.MoveSavedRequestToTop(existing);
                     ActiveRequestName = existing.Name;
                     IsDirty = false;
@@ -1041,6 +1053,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     {
         return new RequestModel
         {
+            FormatVersion = RequestModel.CurrentFormatVersion,
             Method = SelectedMethod,
             Url = RequestUrl,
             Headers = RequestHeaders
@@ -1102,7 +1115,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             BodyText = string.Empty,
             AuthMode = AuthMode.None,
             TimeoutSeconds = baseModel.TimeoutSeconds,
-            FollowRedirects = baseModel.FollowRedirects,
+            // A browser never follows a redirect on a preflight: it fails the request. Show
+            // the 3xx itself, which the analysis reports as a failed preflight status.
+            FollowRedirects = false,
             CorsEnabled = CorsEnabled,
             CorsOrigin = CorsOrigin,
             CorsRequestMethod = CorsRequestMethod,

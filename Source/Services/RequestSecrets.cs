@@ -24,6 +24,10 @@ public static class RequestSecrets
     private static readonly string[] SensitiveNameFragments =
         ["token", "secret", "password", "passwd", "apikey", "api-key", "api_key", "x-auth", "session"];
 
+    /// <summary>Appended to a status line when <see cref="UnprotectInPlace"/> reported a failure.</summary>
+    public const string UnreadableNote =
+        "stored secrets couldn't be decrypted (saved by another Windows user or PC), so they're empty - re-enter them before saving";
+
     public static RequestModel ProtectClone(RequestModel request)
     {
         var clone = request.Clone();
