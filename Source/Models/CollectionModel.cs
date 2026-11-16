@@ -36,13 +36,7 @@ public class CollectionModel
         Description ??= string.Empty;
         PreRequestScript ??= string.Empty;
         TestScript ??= string.Empty;
-        Variables ??= [];
-        Variables.RemoveAll(v => v is null);
-        foreach (var variable in Variables)
-        {
-            variable.Key ??= string.Empty;
-            variable.Value ??= string.Empty;
-        }
+        Variables = Variables.Normalized();
         Items ??= [];
         NormalizeItems(Items);
     }
@@ -63,27 +57,10 @@ public class CollectionModel
         }
     }
 
-    /// <summary>The enabled variables as a lookup; a later duplicate key wins, as in Postman.</summary>
-    public Dictionary<string, string> EnabledVariables()
-    {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var variable in Variables.Where(v => v.IsEnabled && !string.IsNullOrWhiteSpace(v.Key)))
-            map[variable.Key.Trim()] = variable.Value;
-        return map;
-    }
+    public Dictionary<string, string> EnabledVariables() => Variables.EnabledMap();
 
     /// <summary>Sets an existing variable (re-enabling it) or adds a new one.</summary>
-    public void SetVariable(string key, string value)
-    {
-        var existing = Variables.LastOrDefault(v => v.Key.Trim() == key);
-        if (existing is null)
-        {
-            Variables.Add(new CollectionVariable { Key = key, Value = value });
-            return;
-        }
-        existing.Value = value;
-        existing.IsEnabled = true;
-    }
+    public void SetVariable(string key, string value) => Variables.SetValue(key, value);
 
     /// <summary>Every item in the tree, depth first.</summary>
     public IEnumerable<CollectionItem> AllItems() => Flatten(Items);

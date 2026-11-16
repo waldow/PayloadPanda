@@ -14,6 +14,9 @@ public class SettingsModel
     // Pre-request and test scripts (often imported with a collection) run when sending.
     public bool RunScripts { get; set; } = true;
 
+    // The environment whose variables apply to every request; null for none.
+    public Guid? ActiveEnvironmentId { get; set; }
+
     // Editor
     public int EditorFontSize { get; set; } = 13;
     public bool EditorWordWrap { get; set; } = true;

@@ -26,7 +26,8 @@ public sealed class ScriptContext
     /// <summary>Null for pre-request scripts.</summary>
     public ScriptResponse? Response { get; init; }
 
-    public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>();
+    /// <summary>The variable layers before the scripts run.</summary>
+    public VariableScopes Scopes { get; init; } = VariableScopes.Empty;
 }
 
 public sealed class ScriptResult
@@ -34,8 +35,8 @@ public sealed class ScriptResult
     public List<ScriptTestResult> Tests { get; } = [];
     public List<ScriptConsoleLine> Console { get; } = [];
 
-    /// <summary>The variables after the scripts ran (set, changed and unset applied).</summary>
-    public Dictionary<string, string> Variables { get; set; } = [];
+    /// <summary>The variable layers after the scripts ran (set, changed and unset applied to each).</summary>
+    public VariableScopes Scopes { get; set; } = VariableScopes.Empty;
 
     /// <summary>The request headers after the scripts ran.</summary>
     public List<KeyValuePair<string, string>> RequestHeaders { get; set; } = [];
@@ -70,7 +71,7 @@ public static class ScriptRunner
     {
         var result = new ScriptResult
         {
-            Variables = new Dictionary<string, string>(context.Variables, StringComparer.Ordinal),
+            Scopes = context.Scopes,
             RequestHeaders = context.Request.Headers.ToList()
         };
 
@@ -148,14 +149,26 @@ public static class ScriptRunner
         static JsonArray Headers(IEnumerable<KeyValuePair<string, string>> headers) =>
             new(headers.Select(h => (JsonNode?)new JsonObject { ["key"] = h.Key, ["value"] = h.Value }).ToArray());
 
-        var variables = new JsonObject();
-        foreach (var (key, value) in soFar.Variables)
-            variables[key] = value;
+        static JsonObject Layer(IReadOnlyDictionary<string, string> values)
+        {
+            var layer = new JsonObject();
+            foreach (var (key, value) in values)
+                layer[key] = value;
+            return layer;
+        }
 
+        var scopes = soFar.Scopes;
         var root = new JsonObject
         {
             ["info"] = new JsonObject { ["eventName"] = context.EventName, ["requestName"] = context.RequestName },
-            ["variables"] = variables,
+            ["environmentName"] = scopes.EnvironmentName,
+            ["scopes"] = new JsonObject
+            {
+                ["globals"] = Layer(scopes.Globals),
+                ["collection"] = Layer(scopes.Collection),
+                ["environment"] = Layer(scopes.Environment),
+                ["locals"] = Layer(scopes.Locals)
+            },
             ["request"] = new JsonObject
             {
                 ["method"] = context.Request.Method,
@@ -214,10 +227,14 @@ public static class ScriptRunner
             foreach (var line in root.GetProperty("console").EnumerateArray())
                 result.Console.Add(new ScriptConsoleLine(Text(line, "level"), Text(line, "text")));
 
-            var variables = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var variable in root.GetProperty("variables").EnumerateObject())
-                variables[variable.Name] = variable.Value.ValueKind == JsonValueKind.String ? variable.Value.GetString()! : variable.Value.GetRawText();
-            result.Variables = variables;
+            var scopes = root.GetProperty("scopes");
+            result.Scopes = result.Scopes with
+            {
+                Globals = Layer(scopes, "globals"),
+                Collection = Layer(scopes, "collection"),
+                Environment = Layer(scopes, "environment"),
+                Locals = Layer(scopes, "locals")
+            };
 
             result.RequestHeaders = root.GetProperty("requestHeaders").EnumerateArray()
                 .Select(h => new KeyValuePair<string, string>(Text(h, "key"), Text(h, "value")))
@@ -228,6 +245,14 @@ public static class ScriptRunner
             // The script broke the collector itself (e.g. overwrote it): keep the earlier state.
             result.Error ??= $"The script's results couldn't be read: {ex.Message}";
         }
+    }
+
+    private static Dictionary<string, string> Layer(JsonElement scopes, string name)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var variable in scopes.GetProperty(name).EnumerateObject())
+            values[variable.Name] = variable.Value.ValueKind == JsonValueKind.String ? variable.Value.GetString()! : variable.Value.GetRawText();
+        return values;
     }
 
     private static string Text(JsonElement element, string name) =>

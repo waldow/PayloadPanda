@@ -62,6 +62,21 @@
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                                 Margin="0,0,8,0">
+                        <!-- The active environment: its variables apply to every request. -->
+                        <Border CornerRadius="4" VerticalAlignment="Center" Margin="0,0,4,0"
+                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                                Background="{DynamicResource BgInput}"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                ToolTip="The environment whose variables apply to every request">
+                            <ComboBox ItemsSource="{Binding Environments.Choices}"
+                                      SelectedItem="{Binding Environments.SelectedChoice}"
+                                      FontSize="12" MinWidth="150" MaxWidth="220" BorderThickness="0"/>
+                        </Border>
+                        <Button Content="Environments" Style="{StaticResource GhostButton}"
+                                WindowChrome.IsHitTestVisibleInChrome="True"
+                                Command="{Binding Environments.ManageCommand}"
+                                ToolTip="Edit environments and globals"/>
+                        <Border Width="1" Background="{DynamicResource BorderBrush}" Margin="8,2"/>
                         <Button Content="Export" Style="{StaticResource GhostButton}"
                                 WindowChrome.IsHitTestVisibleInChrome="True"
                                 Command="{Binding ExportRequestCommand}" Margin="0,0,4,0"/>
