@@ -23,6 +23,8 @@
          with the Windows Desktop runtime that UseWPF already brings in. -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="AvalonEdit" Version="6.3.1.120" />
+    <!-- JavaScript engine for request scripts (pure managed, no native code). -->
+    <PackageReference Include="Jint" Version="4.18.0" />
   </ItemGroup>
 
 </Project>
