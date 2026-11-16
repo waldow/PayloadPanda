@@ -34,46 +34,18 @@ public static class CurlExporter
         };
         var nl = $" {continuation}\n  ";
 
-        var sb = new StringBuilder(cmd);
-
-        // -I sends HEAD and stops after the headers; -X HEAD would wait for a body forever.
-        if (composed.Method == HttpMethodType.HEAD)
-            sb.Append(" -I");
-        else if (composed.Method != HttpMethodType.GET)
-            sb.Append($" -X {composed.Method}");
-
-        if (request.FollowRedirects)
-            sb.Append(" -L");
-
-        sb.Append($" --max-time {Math.Clamp(request.TimeoutSeconds, 1, 300)}");
-        sb.Append(' ').Append(Quote(composed.Uri.AbsoluteUri, style));
-
         var isFormData = composed.HasBody && request.BodyMode == BodyMode.FormData;
-        foreach (var (key, value) in composed.Headers)
-        {
-            // Basic auth reads better as -u user:pass; curl builds the same header from it.
-            if (request.AuthMode == AuthMode.Basic && key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
-                continue;
 
-            // With -F curl writes multipart/form-data and its own boundary.
-            if (isFormData && key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            // "Name:" with nothing after it tells curl to remove the header; "Name;" sends it empty.
-            var header = value.Length == 0 ? $"{key};" : $"{key}: {value}";
-            sb.Append(nl).Append("-H ").Append(Quote(header, style));
-        }
-
-        if (request.AuthMode == AuthMode.Basic)
-            sb.Append(nl).Append("-u ").Append(Quote($"{request.AuthUsername}:{request.AuthPassword}", style));
-
+        // The body arguments come last in the command but are built first: whether curl
+        // gets one decides how the method is written.
+        var bodyArgs = new StringBuilder();
         if (isFormData)
         {
-            AppendFormParts(sb, nl, composed.FormParts, style, warnings);
+            AppendFormParts(bodyArgs, nl, composed.FormParts, style, warnings);
         }
         else if (composed.HasBody && request.BodyMode == BodyMode.Binary)
         {
-            AppendBinaryBody(sb, nl, composed.BinaryFilePath, style, warnings);
+            AppendBinaryBody(bodyArgs, nl, composed.BinaryFilePath, style, warnings);
         }
         else if (composed.HasBody && composed.BodyText.Length > 0)
         {
@@ -93,8 +65,46 @@ public static class CurlExporter
             }
 
             // --data-raw, unlike -d, doesn't treat a leading @ as "read this file".
-            sb.Append(nl).Append("--data-raw ").Append(Quote(body, style));
+            bodyArgs.Append(nl).Append("--data-raw ").Append(Quote(body, style));
         }
+
+        var sb = new StringBuilder(cmd);
+
+        // -I sends HEAD and stops after the headers; -X HEAD would wait for a body forever.
+        // A body argument already makes curl POST, and spelling out -X POST as well would
+        // pin the method across redirects (-L), where the app — like a browser — follows a
+        // 301/302/303 with GET.
+        var bodyImpliesPost = composed.Method == HttpMethodType.POST && bodyArgs.Length > 0;
+        if (composed.Method == HttpMethodType.HEAD)
+            sb.Append(" -I");
+        else if (composed.Method != HttpMethodType.GET && !bodyImpliesPost)
+            sb.Append($" -X {composed.Method}");
+
+        if (request.FollowRedirects)
+            sb.Append(" -L");
+
+        sb.Append($" --max-time {Math.Clamp(request.TimeoutSeconds, 1, 300)}");
+        sb.Append(' ').Append(Quote(composed.Uri.AbsoluteUri, style));
+
+        foreach (var (key, value) in composed.Headers)
+        {
+            // Basic auth reads better as -u user:pass; curl builds the same header from it.
+            if (request.AuthMode == AuthMode.Basic && key.Equals("Authorization", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // With -F curl writes multipart/form-data and its own boundary.
+            if (isFormData && key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // "Name:" with nothing after it tells curl to remove the header; "Name;" sends it empty.
+            var header = value.Length == 0 ? $"{key};" : $"{key}: {value}";
+            sb.Append(nl).Append("-H ").Append(Quote(header, style));
+        }
+
+        if (request.AuthMode == AuthMode.Basic)
+            sb.Append(nl).Append("-u ").Append(Quote($"{request.AuthUsername}:{request.AuthPassword}", style));
+
+        sb.Append(bodyArgs);
 
         return new CurlExportResult(sb.ToString(), warnings.Count == 0 ? null : string.Join("; ", warnings));
     }

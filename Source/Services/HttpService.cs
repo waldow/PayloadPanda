@@ -26,6 +26,10 @@ public class HttpService
             var handler = new SocketsHttpHandler
             {
                 AllowAutoRedirect = key.Redirects,
+                // No cookie jar: a Set-Cookie from one response must not silently ride along
+                // on later requests. Only a Cookie row in the Headers grid sends cookies, so
+                // the request matches the cURL export and the raw-socket transport.
+                UseCookies = false,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5)
             };
             if (!key.Ssl)

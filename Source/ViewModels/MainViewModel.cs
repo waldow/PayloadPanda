@@ -255,7 +255,14 @@ public partial class MainViewModel : ObservableObject
             return;
 
         var saved = item.SavedRequestId is { } id ? SavedRequests.FirstOrDefault(r => r.Id == id) : null;
+        // One tab per saved request: if it's already open elsewhere, this snapshot opens as
+        // an unlinked draft, so saving it can't silently overwrite what that tab is editing.
+        if (saved != null && Tabs.Any(t => t.ActiveSavedRequestId == saved.Id))
+            saved = null;
+
         var status = $"Loaded {item.Method} {item.Url} from history";
+        if (item.BodyOmitted)
+            status += " - the body was too large to keep in history, so it's empty";
         if (!secretsReadable)
             status += " - auth secrets couldn't be decrypted (saved by another Windows user or PC)";
 
@@ -297,9 +304,15 @@ public partial class MainViewModel : ObservableObject
 
         if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.NewName))
         {
+            var (previousName, previousModified) = (saved.Name, saved.ModifiedAt);
             saved.Name = dialog.NewName;
             saved.ModifiedAt = DateTime.Now;
-            await TrySaveRequestFileAsync(saved);
+            if (!await TrySaveRequestFileAsync(saved))
+            {
+                // Keep the library entry matching what's on disk.
+                (saved.Name, saved.ModifiedAt) = (previousName, previousModified);
+                return;
+            }
 
             foreach (var tab in Tabs)
                 tab.RenameSavedRequestLink(saved.Id, saved.Name);
@@ -353,20 +366,23 @@ public partial class MainViewModel : ObservableObject
             Request = saved.Request.Clone()
         };
 
-        SavedRequests.Insert(0, duplicate);
-        await TrySaveRequestFileAsync(duplicate);
+        // Only list the copy once it's actually on disk.
+        if (await TrySaveRequestFileAsync(duplicate))
+            SavedRequests.Insert(0, duplicate);
     }
 
-    private async Task TrySaveRequestFileAsync(SavedRequest saved)
+    private async Task<bool> TrySaveRequestFileAsync(SavedRequest saved)
     {
         try
         {
             await _savedRequestService.SaveAsync(saved);
+            return true;
         }
         catch (Exception ex)
         {
             MessageBox.Show($"Could not save \"{saved.Name}\": {ex.Message}", "Save Request",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
+            return false;
         }
     }
 
@@ -641,7 +657,9 @@ public partial class MainViewModel : ObservableObject
                 SelectedIndex = selectedIndex,
                 Tabs = Tabs.Select(tab => tab.ToDraft()).ToList()
             };
-            await _tabSessionService.SaveAsync(session).ConfigureAwait(false);
+            // The drafts are fresh copies, so encrypting and serializing them (every tab,
+            // bodies included) can run off the UI thread.
+            await Task.Run(() => _tabSessionService.SaveAsync(session)).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -673,7 +691,9 @@ public partial class MainViewModel : ObservableObject
     {
         try
         {
-            await _persistenceService.SaveHistoryAsync(snapshot, _settings.MaxHistoryItems);
+            // Off the UI thread: the merge and serialization cover the whole history.
+            var maxItems = _settings.MaxHistoryItems;
+            await Task.Run(() => _persistenceService.SaveHistoryAsync(snapshot, maxItems));
         }
         catch (Exception ex)
         {

@@ -47,7 +47,7 @@ public class RequestTabSessionService
             foreach (var tab in session.Tabs)
             {
                 tab.Request.Normalize();
-                RequestSecrets.UnprotectInPlace(tab.Request);
+                tab.SecretsUnreadable = !RequestSecrets.UnprotectInPlace(tab.Request);
             }
 
             return session;

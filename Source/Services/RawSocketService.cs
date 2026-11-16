@@ -116,7 +116,10 @@ public class RawSocketService
 
             // ---- read the response ----
             phase = RequestPhase.ReadResponse;
-            var (rawBytes, firstByteMs, truncated) = await ReadAllAsync(stream, totalSw, token).ConfigureAwait(false);
+            var (rawBytes, firstByteMs, truncated) = await ReadAllAsync(
+                stream, totalSw, composed.Method == HttpMethodType.HEAD, token).ConfigureAwait(false);
+            if (rawBytes.Length == 0)
+                throw new IOException("the server closed the connection without sending a response");
             // Time the server took to start answering once the request was out — a phase of
             // its own, comparable with the DNS/TCP/TLS bars rather than a running total.
             diag.Timings.TimeToFirstByteMs = Math.Max(0, firstByteMs - requestSentMs);
@@ -252,15 +255,19 @@ public class RawSocketService
     // ---- response reading / parsing ----
 
     private static async Task<(byte[] bytes, double firstByteMs, bool truncated)> ReadAllAsync(
-        Stream stream, Stopwatch sw, CancellationToken token)
+        Stream stream, Stopwatch sw, bool headRequest, CancellationToken token)
     {
         using var ms = new MemoryStream();
         var buffer = new byte[ReadBufferSize];
         var firstByteMs = 0.0;
         var first = true;
+        var framer = new ResponseFramer(headRequest);
         int read;
 
         // The cap covers head + body, so a response that hits it is reported as truncated.
+        // Reading stops once the message is complete (Content-Length reached, final chunk
+        // seen), so a server that keeps the connection open doesn't turn a full response
+        // into a timeout; without either, the body runs until the server closes.
         while ((read = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
         {
             if (first)
@@ -271,6 +278,8 @@ public class RawSocketService
             ms.Write(buffer, 0, read);
             if (ms.Length > ResponseText.MaxBodyBytes)
                 return (ms.ToArray(), firstByteMs, true);
+            if (framer.IsComplete(ms.GetBuffer(), (int)ms.Length))
+                break;
         }
 
         return (ms.ToArray(), firstByteMs, false);
@@ -316,7 +325,7 @@ public class RawSocketService
         return response;
     }
 
-    private static List<KeyValuePair<string, string>> ParseHead(string headText, ResponseModel response)
+    internal static List<KeyValuePair<string, string>> ParseHead(string headText, ResponseModel response)
     {
         var lines = headText.Split("\r\n");
 
@@ -340,9 +349,12 @@ public class RawSocketService
         return headers;
     }
 
-    private static int IndexOfHeaderSeparator(byte[] data, int start)
+    private static int IndexOfHeaderSeparator(byte[] data, int start) =>
+        IndexOfHeaderSeparator(data, start, data.Length);
+
+    internal static int IndexOfHeaderSeparator(byte[] data, int start, int length)
     {
-        for (var i = start; i + 3 < data.Length; i++)
+        for (var i = start; i + 3 < length; i++)
             if (data[i] == 13 && data[i + 1] == 10 && data[i + 2] == 13 && data[i + 3] == 10)
                 return i;
         return -1;
@@ -366,7 +378,8 @@ public class RawSocketService
 
             pos = lineEnd + 2;
             if (chunkSize <= 0) break;
-            if (pos + chunkSize > body.Length) chunkSize = body.Length - pos;
+            // Compared this way round so a huge declared size can't overflow.
+            if (chunkSize > body.Length - pos) chunkSize = body.Length - pos;
 
             output.Write(body, pos, chunkSize);
             pos += chunkSize + 2; // skip the chunk data and its trailing CRLF
@@ -374,9 +387,11 @@ public class RawSocketService
         return output.ToArray();
     }
 
-    private static int FindCrlf(byte[] data, int start)
+    private static int FindCrlf(byte[] data, int start) => FindCrlf(data, start, data.Length);
+
+    internal static int FindCrlf(byte[] data, int start, int length)
     {
-        for (var i = start; i + 1 < data.Length; i++)
+        for (var i = start; i + 1 < length; i++)
             if (data[i] == 13 && data[i + 1] == 10)
                 return i;
         return -1;
