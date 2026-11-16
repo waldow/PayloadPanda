@@ -43,6 +43,9 @@ public partial class CollectionNodeViewModel : ObservableObject
 
     public Guid NodeId => Item?.Id ?? Collection.Id;
 
+    /// <summary>How many requests a collection or folder holds, at any depth.</summary>
+    public int RequestCount => SelfAndDescendants().Count(n => n.IsRequest);
+
     public static CollectionNodeViewModel Build(CollectionModel collection)
     {
         var root = new CollectionNodeViewModel(collection, null);
@@ -85,7 +88,11 @@ public partial class CollectionsViewModel : ObservableObject
     {
         _owner = owner;
         _service = service;
+        Roots.CollectionChanged += (_, _) => OnPropertyChanged(nameof(IsEmpty));
     }
+
+    /// <summary>No collections yet: the tab shows what they are for and how to get one.</summary>
+    public bool IsEmpty => Roots.Count == 0;
 
     public ObservableCollection<CollectionNodeViewModel> Roots { get; } = [];
 
@@ -402,7 +409,7 @@ public partial class CollectionsViewModel : ObservableObject
     [RelayCommand]
     private async Task NewCollectionAsync()
     {
-        if (PromptForName("New Collection") is { } name)
+        if (PromptForName("New collection", "New collection", "Create") is { } name)
             await AddCollectionAsync(new CollectionModel { Name = name });
     }
 
@@ -449,7 +456,7 @@ public partial class CollectionsViewModel : ObservableObject
     [RelayCommand]
     private async Task NewFolderAsync(CollectionNodeViewModel? node)
     {
-        if (node is { IsContainer: true } && PromptForName("New Folder") is { } name)
+        if (node is { IsContainer: true } && PromptForName("New folder", "New folder", "Create") is { } name)
             await AddFolderAsync(node, name);
     }
 
@@ -476,7 +483,11 @@ public partial class CollectionsViewModel : ObservableObject
     [RelayCommand]
     private async Task RenameNodeAsync(CollectionNodeViewModel? node)
     {
-        if (node is not null && PromptForName(node.Name) is { } name)
+        if (node is null)
+            return;
+
+        var kind = node.IsCollection ? "collection" : node.IsFolder ? "folder" : "request";
+        if (PromptForName(node.Name, $"Rename {kind}", "Rename") is { } name)
             await RenameAsync(node, name);
     }
 
@@ -501,9 +512,9 @@ public partial class CollectionsViewModel : ObservableObject
             await DeleteAsync(node);
     }
 
-    private static string? PromptForName(string current)
+    private static string? PromptForName(string current, string title, string action)
     {
-        var dialog = new Views.RenameDialog(current) { Owner = Application.Current.MainWindow };
+        var dialog = new Views.RenameDialog(current, title, action) { Owner = Application.Current.MainWindow };
         return dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.NewName) ? dialog.NewName : null;
     }
 }
