@@ -84,6 +84,10 @@
                     <CheckBox x:Name="FollowRedirectsBox" Content="Follow redirects" Margin="0,0,0,6"/>
                     <CheckBox x:Name="SslVerificationBox" Content="SSL certificate verification" Margin="0,0,0,4"/>
                     <TextBlock Text="Disable for self-signed certificates" FontSize="10"
+                               Foreground="{DynamicResource TextMuted}" Margin="22,0,0,8"/>
+                    <CheckBox x:Name="RunScriptsBox" Content="Run pre-request and test scripts" Margin="0,0,0,4"/>
+                    <TextBlock Text="Scripts are sandboxed: they can read the request and response and set variables and headers, nothing else"
+                               FontSize="10" TextWrapping="Wrap"
                                Foreground="{DynamicResource TextMuted}" Margin="22,0,0,16"/>
 
                     <Separator Margin="0,0,0,12"/>

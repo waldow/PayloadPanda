@@ -655,6 +655,51 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
+
+            <!-- JavaScript against a subset of Postman's pm API; text is synced in code-behind. -->
+            <TabItem Header="Scripts">
+                <Grid Margin="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*" MinHeight="40"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*" MinHeight="40"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="{Binding VariableScopeText}" FontSize="11" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextMuted}" Margin="0,0,0,6"/>
+                    <TextBlock Grid.Row="1" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,4">
+                        <Run Text="PRE-REQUEST" FontWeight="SemiBold"/><Run Text="  runs before sending: pm.variables, pm.request.headers"/>
+                    </TextBlock>
+                    <avalonedit:TextEditor
+                        x:Name="PreRequestScriptEditor"
+                        FontFamily="{DynamicResource CodeFont}"
+                        FontSize="{Binding EditorFontSize}"
+                        Background="{DynamicResource BgInput}"
+                        Foreground="{DynamicResource TextPrimary}"
+                        ShowLineNumbers="True"
+                        WordWrap="{Binding EditorWordWrap}"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1"
+                        LineNumbersForeground="{DynamicResource TextMuted}"
+                        Grid.Row="2"/>
+                    <TextBlock Grid.Row="3" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,8,0,4">
+                        <Run Text="TESTS" FontWeight="SemiBold"/><Run Text="  runs after the response: pm.response, pm.test, pm.expect, pm.collectionVariables.set"/>
+                    </TextBlock>
+                    <avalonedit:TextEditor
+                        x:Name="TestScriptEditor"
+                        FontFamily="{DynamicResource CodeFont}"
+                        FontSize="{Binding EditorFontSize}"
+                        Background="{DynamicResource BgInput}"
+                        Foreground="{DynamicResource TextPrimary}"
+                        ShowLineNumbers="True"
+                        WordWrap="{Binding EditorWordWrap}"
+                        BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1"
+                        LineNumbersForeground="{DynamicResource TextMuted}"
+                        Grid.Row="4"/>
+                </Grid>
+            </TabItem>
         </TabControl>
 
         <GridSplitter Grid.Row="2" Height="3"
@@ -927,6 +972,64 @@
                                      BorderBrush="{DynamicResource BorderBrush}"
                                      TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto"
                                      Padding="10"/>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+
+                <!-- What the pre-request and test scripts of the last send produced. -->
+                <TabItem Header="{Binding TestsTabHeader}"
+                         Visibility="{Binding HasScriptOutput, Converter={StaticResource BoolToVisibility}}">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,12">
+                        <StackPanel>
+                            <Border Margin="0,0,0,12" Padding="12,10" CornerRadius="6"
+                                    Background="#2D1418" BorderBrush="#5C2329" BorderThickness="1"
+                                    Visibility="{Binding ScriptError, Converter={StaticResource NullToVisibility}}">
+                                <TextBlock Text="{Binding ScriptError}" Foreground="{DynamicResource TextPrimary}"
+                                           FontSize="12" TextWrapping="Wrap"/>
+                            </Border>
+
+                            <ItemsControl ItemsSource="{Binding TestResults}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="48"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock x:Name="Badge" Text="FAIL" FontSize="10" FontWeight="Bold"
+                                                       Foreground="{DynamicResource AccentRed}" Margin="0,2,0,0"/>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="{Binding Name}" FontSize="12" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource TextPrimary}"/>
+                                                <TextBlock Text="{Binding Error}" FontSize="11" TextWrapping="Wrap"
+                                                           FontFamily="{DynamicResource CodeFont}"
+                                                           Foreground="{DynamicResource TextSecondary}" Margin="0,2,0,0"
+                                                           Visibility="{Binding Error, Converter={StaticResource NullToVisibility}}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding Passed}" Value="True">
+                                                <Setter TargetName="Badge" Property="Text" Value="PASS"/>
+                                                <Setter TargetName="Badge" Property="Foreground" Value="{DynamicResource AccentGreen}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Skipped}" Value="True">
+                                                <Setter TargetName="Badge" Property="Text" Value="SKIP"/>
+                                                <Setter TargetName="Badge" Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <StackPanel Visibility="{Binding ScriptConsoleText, Converter={StaticResource NullToVisibility}}">
+                                <TextBlock Text="CONSOLE" Foreground="{DynamicResource TextSecondary}"
+                                           FontSize="11" FontWeight="SemiBold" Margin="0,8,0,8"/>
+                                <TextBox Text="{Binding ScriptConsoleText, Mode=OneWay}" IsReadOnly="True"
+                                         FontFamily="{DynamicResource CodeFont}" FontSize="12"
+                                         Background="{DynamicResource BgInput}" BorderThickness="1"
+                                         BorderBrush="{DynamicResource BorderBrush}"
+                                         TextWrapping="Wrap" Padding="10"/>
+                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>

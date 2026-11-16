@@ -15,6 +15,7 @@ Postman-lite, built natively in WPF on .NET 10 — no Electron, no account, no c
 - **Upload anything** — build multipart forms with text fields and files (drag them in from Explorer), send URL-encoded forms without hand-encoding, or PUT a single file as a binary body.
 - **Bamboo-simple storage** — saved requests, history, open tabs, and settings are plain local JSON.
 - **Curl tamer** — copy any request as a ready-to-run `curl` command for Bash, PowerShell or cmd.exe, quoting and all.
+- **Collections that travel** — import a Postman collection, fill in its `{{variables}}`, and let its test scripts pass a token from one request to the next.
 - **AI import helper** — paste messy snippets and let the panda sort the payload from the leaves.
 - **CORS detective** — add browser-style `Origin` headers, run preflight checks, and see exactly why a browser would block a response.
 - **X-ray vision** — flip to RAW mode and watch the panda crack open the connection: DNS, TCP, TLS handshake, certs, and the bytes on the wire.
@@ -89,6 +90,14 @@ Built for the curious and the stuck:
 - **Saving is explicit** — **Save Current** writes the active tab to the library. Sending never changes a saved request, so you can experiment freely; edited tabs show a `*` until saved.
 - **Tabs survive restarts** — open tabs, including unsaved drafts, are saved about a second after each change and restored on next launch.
 - **Request history** — every send is logged with timestamp, method, URL, status, and duration. Double-click an entry to reopen the exact request that was sent; if it came from a saved request that still exists, the tab stays linked to it, so **Save Current** updates that entry. History is capped (default 500, configurable) and can be cleared.
+
+### Collections, variables & scripts
+- **Collections** — a third sidebar tab with a tree of collections, folders and requests. Click a request to open it; **Save Current** on that tab writes back into the collection. Right-click for new folder, add the current request, rename, duplicate, delete. Each collection is one JSON file under `%AppData%\PayloadPanda\collections\`.
+- **Postman Collection v2.1 import / export** — **Import** reads a v2.1 (or v2.0) collection file: folders, URLs, headers, raw / URL-encoded / form-data / file bodies, Bearer / Basic / API-key auth (inherited auth is applied to each request), variables and scripts. Anything PayloadPanda has no equivalent for (other auth types, custom HTTP methods, saved example responses) is listed after the import rather than dropped silently. **Export as Postman Collection** writes v2.1 back out — with variable values and credentials in plain text, so check before sharing.
+- **Variables** — write `{{name}}` in a URL, parameter, header, body, form field or auth field and it's replaced from the collection's variables when sending and in **Copy as cURL**. Values can refer to other variables; `{{$guid}}`, `{{$timestamp}}`, `{{$isoTimestamp}}` and `{{$randomInt}}` are generated. A name with no value is left as typed and named in the status bar. Variables marked **Secret** are DPAPI-encrypted on disk, and history stores the request with its placeholders, never the substituted values.
+- **Scripts** — a **Scripts** tab per request with *Pre-request* and *Tests* JavaScript, run with a subset of Postman's `pm` API: `pm.response` (`code`, `status`, `headers`, `text()`, `json()`, `to.have.status()`), `pm.request` (headers can be added or changed before sending), `pm.collectionVariables` / `pm.variables` (`pm.environment` and `pm.globals` map to the same variables), `pm.test`, `pm.expect` (chai-style: `equal`, `eql`, `include`, `property`, `above`/`below`, `match`, `a('string')`, `.not`, …), `console.log`, `atob`/`btoa`. Collection and folder scripts run before the request's own. Results show on the response's **Tests** tab with console output; variables a script sets are saved to the collection, so a login request can hand its token to the next one.
+- **Sandboxed** — scripts can't reach files, the network or .NET; each run has time and memory limits. `pm.sendRequest`, `require`, `pm.cookies` and `postman.setNextRequest` aren't supported and say so. Turn scripts off entirely in Settings.
+- **Not yet**: environments and globals as separate scopes, a collection runner, drag-and-drop reordering.
 
 ### Import / export
 - **Import / export request as JSON** via standard file dialogs — share requests via git, Slack, or wherever.

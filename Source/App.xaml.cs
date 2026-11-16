@@ -15,7 +15,8 @@ public partial class App : Application
     public static AiImportService AiImportService { get; } = new();
     public static SavedRequestService SavedRequestService { get; } = new();
     public static RequestTabSessionService RequestTabSessionService { get; } = new();
-    public static MainViewModel MainViewModel { get; } = new(HttpService, RawSocketService, PersistenceService, AiImportService, SavedRequestService, RequestTabSessionService);
+    public static CollectionService CollectionService { get; } = new();
+    public static MainViewModel MainViewModel { get; } = new(HttpService, RawSocketService, PersistenceService, AiImportService, SavedRequestService, RequestTabSessionService, CollectionService);
 
     private SingleInstance? _singleInstance;
 
@@ -62,6 +63,8 @@ public partial class App : Application
         await TryLoadAsync("history", MainViewModel.LoadHistoryFromDiskAsync, failures);
         if (await TryLoadAsync("saved requests", MainViewModel.LoadSavedRequestsFromDiskAsync, failures))
             MainViewModel.RelinkTabsToSavedRequests(); // only against a complete library
+        if (await TryLoadAsync("collections", MainViewModel.Collections.LoadFromDiskAsync, failures))
+            MainViewModel.RelinkTabsToCollections();
         if (failures.Count > 0)
         {
             MessageBox.Show($"Failed to load saved data:\n\n{string.Join("\n", failures)}\n\nStarting with defaults for those.",

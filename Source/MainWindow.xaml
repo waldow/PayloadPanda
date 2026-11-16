@@ -108,7 +108,7 @@
 
             <Grid Grid.Row="1">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="250" MinWidth="180"/>
+                    <ColumnDefinition Width="320" MinWidth="270"/>
                     <ColumnDefinition Width="3"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
@@ -119,17 +119,14 @@
                         <helpers:BindingProxy x:Key="Proxy" Data="{Binding}"/>
                     </Border.Resources>
                     <TabControl SelectedIndex="{Binding LeftPanelTabIndex}"
-                                Background="Transparent">
-                        <TabItem>
+                                Style="{StaticResource SidebarTabs}">
+                        <TabItem Padding="10,9">
                             <TabItem.Header>
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="SAVED" FontSize="11" FontWeight="Bold"
-                                               VerticalAlignment="Center"/>
-                                    <Border Background="{DynamicResource BgPanel}" CornerRadius="8"
-                                            Padding="6,2" Margin="6,0,0,0">
-                                        <TextBlock Text="{Binding SavedRequests.Count}" FontSize="10"
-                                                   Foreground="{DynamicResource TextSecondary}"/>
-                                    </Border>
+                                    <TextBlock Text="Saved" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding SavedRequests.Count}" FontSize="11" FontWeight="Normal"
+                                               Foreground="{DynamicResource TextSecondary}"
+                                               Margin="6,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </TabItem.Header>
                             <Grid>
@@ -141,9 +138,9 @@
 
                                 <Border Grid.Row="0" Padding="8,6"
                                         BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-                                    <Button Content="+ New Request" Style="{StaticResource GhostButton}"
+                                    <Button Content="+ New request" Style="{StaticResource OutlineButton}"
                                             Command="{Binding NewRequestCommand}"
-                                            HorizontalAlignment="Stretch" FontSize="11"/>
+                                            HorizontalAlignment="Stretch"/>
                                 </Border>
 
                                 <ListBox Grid.Row="1"
@@ -204,7 +201,7 @@
                                                                   Command="{Binding Data.DuplicateSavedRequestCommand, Source={StaticResource Proxy}}"
                                                                   CommandParameter="{Binding}"/>
                                                         <Separator/>
-                                                        <MenuItem Header="Delete"
+                                                        <MenuItem Header="Delete" Foreground="{DynamicResource AccentRed}"
                                                                   Command="{Binding Data.DeleteSavedRequestCommand, Source={StaticResource Proxy}}"
                                                                   CommandParameter="{Binding}"/>
                                                     </ContextMenu>
@@ -221,25 +218,38 @@
                                     </ListBox.InputBindings>
                                 </ListBox>
 
+                                <TextBlock Grid.Row="1" Margin="20,24,20,0" VerticalAlignment="Top"
+                                           TextWrapping="Wrap" FontSize="12" LineHeight="18"
+                                           Foreground="{DynamicResource TextSecondary}"
+                                           Text="Nothing saved yet. Save current keeps the open request here, ready to reopen with one click.">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SavedRequests.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+
                                 <Border Grid.Row="2" Padding="8"
                                         BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
-                                    <Button Content="Save Current" Style="{StaticResource PrimaryButton}"
+                                    <Button Content="Save current" Style="{StaticResource PrimaryButton}"
                                             Command="{Binding SaveCurrentRequestCommand}"
                                             HorizontalAlignment="Stretch" FontSize="11"/>
                                 </Border>
                             </Grid>
                         </TabItem>
 
-                        <TabItem>
+                        <TabItem Padding="10,9">
                             <TabItem.Header>
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="HISTORY" FontSize="11" FontWeight="Bold"
-                                               VerticalAlignment="Center"/>
-                                    <Border Background="{DynamicResource BgPanel}" CornerRadius="8"
-                                            Padding="6,2" Margin="6,0,0,0">
-                                        <TextBlock Text="{Binding HistoryItems.Count}" FontSize="10"
-                                                   Foreground="{DynamicResource TextSecondary}"/>
-                                    </Border>
+                                    <TextBlock Text="History" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding HistoryItems.Count}" FontSize="11" FontWeight="Normal"
+                                               Foreground="{DynamicResource TextSecondary}"
+                                               Margin="6,0,0,0" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </TabItem.Header>
                             <Grid>
@@ -317,11 +327,193 @@
                                     </ListBox.InputBindings>
                                 </ListBox>
 
+                                <TextBlock Grid.Row="0" Margin="20,24,20,0" VerticalAlignment="Top"
+                                           TextWrapping="Wrap" FontSize="12" LineHeight="18"
+                                           Foreground="{DynamicResource TextSecondary}"
+                                           Text="Every request you send is listed here. Double-click one to reopen exactly what was sent.">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HistoryItems.Count}" Value="0">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+
                                 <Border Grid.Row="1" Padding="8"
                                         BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
-                                    <Button Content="Clear History" Style="{StaticResource DangerButton}"
+                                    <Button Content="Clear history" Style="{StaticResource DangerButton}"
                                             Command="{Binding ClearHistoryCommand}"
                                             HorizontalAlignment="Stretch" FontSize="11"/>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Padding="10,9">
+                            <TabItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Collections" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding Collections.Roots.Count}" FontSize="11" FontWeight="Normal"
+                                               Foreground="{DynamicResource TextSecondary}"
+                                               Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </TabItem.Header>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <Border Grid.Row="0" Padding="8,6"
+                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                                        Visibility="{Binding Collections.IsEmpty, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="6"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="Import" Style="{StaticResource OutlineButton}"
+                                                Command="{Binding Collections.ImportCommand}"
+                                                ToolTip="Import a Postman collection (v2.1) file"/>
+                                        <Button Grid.Column="2" Content="+ New collection" Style="{StaticResource OutlineButton}"
+                                                Command="{Binding Collections.NewCollectionCommand}"/>
+                                    </Grid>
+                                </Border>
+
+                                <!-- Nothing here yet: say what a collection is for and offer the two ways to get one. -->
+                                <StackPanel Grid.Row="1" Margin="20,24,20,0" VerticalAlignment="Top"
+                                            Visibility="{Binding Collections.IsEmpty, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBlock Text="No collections yet" FontSize="14" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimary}"/>
+                                    <TextBlock TextWrapping="Wrap" FontSize="12" LineHeight="18" Margin="0,6,0,0"
+                                               Foreground="{DynamicResource TextSecondary}"
+                                               Text="A collection keeps related requests together and gives them shared variables, so a login request can hand its token to the next one."/>
+                                    <Border Margin="0,14,0,0" Padding="10,8" CornerRadius="4"
+                                            Background="{DynamicResource BgInput}"
+                                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1">
+                                        <TextBlock FontFamily="{DynamicResource CodeFont}" FontSize="11" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{DynamicResource TextSecondary}">
+                                            <Run Text="{}{{baseUrl}}" Foreground="{DynamicResource AccentOrange}"/><Run Text="/person/"/><Run Text="{}{{id}}" Foreground="{DynamicResource AccentOrange}"/>
+                                        </TextBlock>
+                                    </Border>
+                                    <Button Content="Import a Postman collection" Style="{StaticResource PrimaryButton}"
+                                            Command="{Binding Collections.ImportCommand}"
+                                            HorizontalAlignment="Stretch" FontSize="12" Margin="0,18,0,0"/>
+                                    <Button Content="Start an empty collection" Style="{StaticResource OutlineButton}"
+                                            Command="{Binding Collections.NewCollectionCommand}"
+                                            HorizontalAlignment="Stretch" Padding="10,7" Margin="0,8,0,0"/>
+                                </StackPanel>
+
+                                <TreeView Grid.Row="1" ItemsSource="{Binding Collections.Roots}"
+                                          Visibility="{Binding Collections.IsEmpty, Converter={StaticResource BoolToVisibility}, ConverterParameter=Invert}">
+                                    <TreeView.ItemContainerStyle>
+                                        <Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
+                                            <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                        </Style>
+                                    </TreeView.ItemContainerStyle>
+                                    <TreeView.ItemTemplate>
+                                        <HierarchicalDataTemplate DataType="{x:Type vm:CollectionNodeViewModel}"
+                                                                  ItemsSource="{Binding Children}">
+                                            <!-- A click on the row opens a request or toggles a folder. -->
+                                            <Grid Background="Transparent">
+                                                <Grid.InputBindings>
+                                                    <MouseBinding MouseAction="LeftClick"
+                                                                  Command="{Binding Data.Collections.ActivateCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                </Grid.InputBindings>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- Requests: the method, in a fixed-width badge so names line up. -->
+                                                <Grid Grid.Column="0" Width="44" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                      Visibility="{Binding IsRequest, Converter={StaticResource BoolToVisibility}}">
+                                                    <Border CornerRadius="3" Opacity="0.2"
+                                                            Background="{Binding Method, Converter={StaticResource MethodToBrush}}"/>
+                                                    <TextBlock Text="{Binding Method}" FontSize="9" FontWeight="Bold" Margin="0,2"
+                                                               HorizontalAlignment="Center"
+                                                               Foreground="{Binding Method, Converter={StaticResource MethodToBrush}}"/>
+                                                </Grid>
+                                                <!-- Folders: a folder glyph. Collections need neither: they are the top-level rows. -->
+                                                <Path Grid.Column="0" Margin="0,0,8,0" VerticalAlignment="Center"
+                                                      Data="M 0 1.5 C 0 0.7 0.7 0 1.5 0 L 4.5 0 L 6 1.5 L 11.5 1.5 C 12.3 1.5 13 2.2 13 3 L 13 8.5 C 13 9.3 12.3 10 11.5 10 L 1.5 10 C 0.7 10 0 9.3 0 8.5 Z"
+                                                      Fill="{DynamicResource TextSecondary}" Opacity="0.75"
+                                                      Visibility="{Binding IsFolder, Converter={StaticResource BoolToVisibility}}"/>
+
+                                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="12"
+                                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                           ToolTip="{Binding Name}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsCollection}" Value="True">
+                                                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                                                    <Setter Property="FontSize" Value="13"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+
+                                                <!-- How many requests a collection or folder holds. -->
+                                                <TextBlock Grid.Column="2" Text="{Binding RequestCount}" FontSize="11"
+                                                           Margin="8,0,6,0" VerticalAlignment="Center"
+                                                           Foreground="{DynamicResource TextSecondary}"
+                                                           Visibility="{Binding IsContainer, Converter={StaticResource BoolToVisibility}}"/>
+
+                                                <Grid.ContextMenu>
+                                                    <ContextMenu>
+                                                        <MenuItem Header="Open" FontWeight="SemiBold"
+                                                                  Visibility="{Binding IsRequest, Converter={StaticResource BoolToVisibility}}"
+                                                                  Command="{Binding Data.Collections.ActivateCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                        <MenuItem Header="Add current request here"
+                                                                  Visibility="{Binding IsContainer, Converter={StaticResource BoolToVisibility}}"
+                                                                  Command="{Binding Data.Collections.AddCurrentRequestCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                        <MenuItem Header="New folder"
+                                                                  Visibility="{Binding IsContainer, Converter={StaticResource BoolToVisibility}}"
+                                                                  Command="{Binding Data.Collections.NewFolderCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                        <MenuItem Header="Variables and scripts..."
+                                                                  Visibility="{Binding IsCollection, Converter={StaticResource BoolToVisibility}}"
+                                                                  Command="{Binding Data.Collections.EditCollectionCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                        <MenuItem Header="Export as Postman collection..."
+                                                                  Visibility="{Binding IsCollection, Converter={StaticResource BoolToVisibility}}"
+                                                                  Command="{Binding Data.Collections.ExportCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                        <Separator/>
+                                                        <MenuItem Header="Rename"
+                                                                  Command="{Binding Data.Collections.RenameNodeCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                        <MenuItem Header="Duplicate"
+                                                                  Command="{Binding Data.Collections.DuplicateNodeCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                        <Separator/>
+                                                        <MenuItem Header="Delete" Foreground="{DynamicResource AccentRed}"
+                                                                  Command="{Binding Data.Collections.DeleteNodeCommand, Source={StaticResource Proxy}}"
+                                                                  CommandParameter="{Binding}"/>
+                                                    </ContextMenu>
+                                                </Grid.ContextMenu>
+                                            </Grid>
+                                        </HierarchicalDataTemplate>
+                                    </TreeView.ItemTemplate>
+                                </TreeView>
+
+                                <Border Grid.Row="2" Padding="8,6"
+                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0"
+                                        Visibility="{Binding Collections.StatusText, Converter={StaticResource NullToVisibility}}">
+                                    <TextBlock Text="{Binding Collections.StatusText}" FontSize="10" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextSecondary}"/>
                                 </Border>
                             </Grid>
                         </TabItem>

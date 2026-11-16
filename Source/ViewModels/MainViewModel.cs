@@ -26,8 +26,11 @@ public partial class MainViewModel : ObservableObject
 
     public MainViewModel(HttpService httpService, RawSocketService rawSocketService,
         PersistenceService persistenceService, AiImportService aiImportService,
-        SavedRequestService savedRequestService, RequestTabSessionService tabSessionService)
+        SavedRequestService savedRequestService, RequestTabSessionService tabSessionService,
+        CollectionService collectionService)
     {
+        // Before the first tab: a workspace asks its owner for collections.
+        Collections = new CollectionsViewModel(this, collectionService);
         _httpService = httpService;
         _rawSocketService = rawSocketService;
         _persistenceService = persistenceService;
@@ -45,6 +48,8 @@ public partial class MainViewModel : ObservableObject
     }
 
     public ObservableCollection<RequestWorkspaceViewModel> Tabs { get; } = [];
+
+    public CollectionsViewModel Collections { get; }
 
     [ObservableProperty]
     private RequestWorkspaceViewModel? _selectedTab;
@@ -266,9 +271,21 @@ public partial class MainViewModel : ObservableObject
         if (!secretsReadable)
             status += " - auth secrets couldn't be decrypted (saved by another Windows user or PC)";
 
+        // The collection gives the draft its variables and scripts back. It stays linked to
+        // the request it was sent from only if that still exists and isn't open elsewhere.
+        var collection = Collections.Find(item.CollectionId);
+        var collectionItem = item.CollectionItemId is { } itemId && collection?.FindItem(itemId) is { IsFolder: false } found &&
+                             !Tabs.Any(t => t.ActiveCollectionItemId == itemId)
+            ? found
+            : null;
+
+        var isDirty = saved is not null ? !RequestsMatch(request, saved.Request)
+            : collectionItem is not null ? !RequestsMatch(request, collectionItem.Request!)
+            : true;
+
         var tab = GetSmartOpenTarget();
-        tab.LoadRequestDraft(request, status,
-            isDirty: saved is null || !RequestsMatch(request, saved.Request), linkedSaved: saved);
+        tab.LoadRequestDraft(request, status, isDirty, linkedSaved: saved,
+            collectionId: collection?.Id, collectionItem: saved is null ? collectionItem : null);
     }
 
     [RelayCommand]
@@ -637,6 +654,44 @@ public partial class MainViewModel : ObservableObject
             else
                 tab.ClearSavedRequestLink(id);
         }
+    }
+
+    // Restored tabs remember their collection. Once collections have loaded, drop links to
+    // deleted collections or requests and pick up renames.
+    public void RelinkTabsToCollections()
+    {
+        foreach (var tab in Tabs)
+        {
+            if (tab.ActiveCollectionId is not { } collectionId)
+                continue;
+
+            var collection = Collections.Find(collectionId);
+            if (collection is null)
+            {
+                tab.ClearCollectionLink(collectionId, itemIds: null);
+            }
+            else if (tab.ActiveCollectionItemId is { } itemId)
+            {
+                if (collection.FindItem(itemId) is { IsFolder: false } item)
+                    tab.RenameCollectionItemLink(itemId, item.Name);
+                else
+                    tab.ClearCollectionLink(collectionId, new HashSet<Guid> { itemId });
+            }
+            tab.RefreshVariableScope();
+        }
+    }
+
+    /// <summary>Opens a collection request, or switches to the tab that already has it open.</summary>
+    internal void OpenCollectionItem(CollectionModel collection, CollectionItem item)
+    {
+        var open = Tabs.FirstOrDefault(t => t.ActiveCollectionItemId == item.Id);
+        if (open != null)
+        {
+            SelectedTab = open;
+            return;
+        }
+
+        GetSmartOpenTarget().LoadCollectionItem(collection, item);
     }
 
     public async Task SaveTabsSessionNowAsync()

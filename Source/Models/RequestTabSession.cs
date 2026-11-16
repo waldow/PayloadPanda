@@ -10,6 +10,8 @@ public class RequestTabDraft
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid? SavedRequestId { get; set; }
+    public Guid? CollectionId { get; set; }
+    public Guid? CollectionItemId { get; set; }
     public string ActiveRequestName { get; set; } = string.Empty;
     public RequestMode RequestMode { get; set; } = RequestMode.Http;
     public int SelectedRequestTabIndex { get; set; }

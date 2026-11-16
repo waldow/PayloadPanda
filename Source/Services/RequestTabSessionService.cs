@@ -17,6 +17,8 @@ public class RequestTabSessionService
             {
                 Id = tab.Id,
                 SavedRequestId = tab.SavedRequestId,
+                CollectionId = tab.CollectionId,
+                CollectionItemId = tab.CollectionItemId,
                 ActiveRequestName = tab.ActiveRequestName,
                 RequestMode = tab.RequestMode,
                 SelectedRequestTabIndex = tab.SelectedRequestTabIndex,
