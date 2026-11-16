@@ -10,12 +10,14 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
 using PayloadPanda.Models;
 using PayloadPanda.Services;
+using PayloadPanda.Services.Scripting;
 
 namespace PayloadPanda.ViewModels;
 
 public partial class RequestWorkspaceViewModel : ObservableObject
 {
     private const int ConnectionTabIndex = 3;
+    private const int TestsTabIndex = 4;
 
     private readonly MainViewModel _owner;
     private readonly HttpService _httpService;
@@ -82,7 +84,10 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
     public bool IsBlank =>
         !ActiveSavedRequestId.HasValue &&
+        !ActiveCollectionId.HasValue &&
         string.IsNullOrWhiteSpace(ActiveRequestName) &&
+        string.IsNullOrWhiteSpace(PreRequestScript) &&
+        string.IsNullOrWhiteSpace(TestScript) &&
         string.IsNullOrWhiteSpace(RequestUrl) &&
         SelectedMethod == HttpMethodType.GET &&
         SelectedBodyMode == BodyMode.None &&
@@ -214,6 +219,36 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     [ObservableProperty]
     private string _activeRequestName = string.Empty;
 
+    // The collection whose variables and scripts apply to this tab, and the request in
+    // it that Save writes back to. The item can be gone (deleted) while the collection stays.
+    [ObservableProperty]
+    private Guid? _activeCollectionId;
+
+    [ObservableProperty]
+    private Guid? _activeCollectionItemId;
+
+    [ObservableProperty]
+    private string _preRequestScript = string.Empty;
+
+    [ObservableProperty]
+    private string _testScript = string.Empty;
+
+    // What the scripts of the last send produced (shown on the response's Tests tab).
+    [ObservableProperty]
+    private ObservableCollection<ScriptTestResult> _testResults = [];
+
+    [ObservableProperty]
+    private string _scriptConsoleText = string.Empty;
+
+    [ObservableProperty]
+    private string _scriptError = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasScriptOutput;
+
+    [ObservableProperty]
+    private string _testsTabHeader = "Tests";
+
     [ObservableProperty]
     private bool _isDirty;
 
@@ -247,6 +282,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     partial void OnCorsIncludeCredentialsChanged(bool value) => MarkRequestChanged();
     // The transport is kept with the tab, not with the request, so switching it isn't an edit.
     partial void OnSelectedRequestModeChanged(RequestMode value) => MarkUiChanged();
+    partial void OnPreRequestScriptChanged(string value) => MarkRequestChanged();
+    partial void OnTestScriptChanged(string value) => MarkRequestChanged();
+    partial void OnActiveCollectionIdChanged(Guid? value) => OnPropertyChanged(nameof(VariableScopeText));
     partial void OnSelectedRequestTabIndexChanged(int value) => MarkUiChanged();
     partial void OnSelectedResponseTabIndexChanged(int value) => MarkUiChanged();
     partial void OnActiveRequestNameChanged(string value) => OnPropertyChanged(nameof(Title));
@@ -261,6 +299,18 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             SelectedResponseTabIndex = 0;
     }
 
+    // Same for the Tests tab, which only exists while there is script output.
+    partial void OnHasScriptOutputChanged(bool value)
+    {
+        if (!value && SelectedResponseTabIndex == TestsTabIndex)
+            SelectedResponseTabIndex = 0;
+    }
+
+    /// <summary>Where {{variables}} on this tab come from, for the Scripts tab.</summary>
+    public string VariableScopeText => _owner.Collections.Find(ActiveCollectionId) is { } collection
+        ? $"Variables and collection scripts come from \"{collection.Name}\"."
+        : "This request isn't in a collection: {{variables}} aren't replaced, and variables a script sets aren't kept.";
+
     public void ApplyEditorSettings(int fontSize, bool wordWrap)
     {
         EditorFontSize = fontSize;
@@ -271,6 +321,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     {
         Id = Id,
         SavedRequestId = ActiveSavedRequestId,
+        CollectionId = ActiveCollectionId,
+        CollectionItemId = ActiveCollectionItemId,
         ActiveRequestName = ActiveRequestName,
         RequestMode = SelectedRequestMode,
         SelectedRequestTabIndex = SelectedRequestTabIndex,
@@ -284,11 +336,13 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         _suppressChangeNotifications = true;
         Id = draft.Id == Guid.Empty ? Guid.NewGuid() : draft.Id;
         ActiveSavedRequestId = draft.SavedRequestId;
-        ActiveRequestName = draft.ActiveRequestName;
+        ActiveCollectionId = draft.CollectionId;
+        ActiveCollectionItemId = draft.CollectionItemId;
+        ActiveRequestName = draft.ActiveRequestName ?? string.Empty;
         SelectedRequestMode = draft.RequestMode;
         SelectedRequestTabIndex = Math.Max(0, draft.SelectedRequestTabIndex);
         // Responses aren't persisted, so a restored tab has no diagnostics to show.
-        SelectedResponseTabIndex = draft.SelectedResponseTabIndex == ConnectionTabIndex
+        SelectedResponseTabIndex = draft.SelectedResponseTabIndex is ConnectionTabIndex or TestsTabIndex
             ? 0
             : Math.Max(0, draft.SelectedResponseTabIndex);
         PopulateFromRequest(draft.Request);
@@ -303,6 +357,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     {
         _suppressChangeNotifications = true;
         ActiveSavedRequestId = saved.Id;
+        ActiveCollectionId = null;
+        ActiveCollectionItemId = null;
         ActiveRequestName = saved.Name;
         SelectedRequestMode = RequestMode.Http;
         PopulateFromRequest(saved.Request);
@@ -319,11 +375,16 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     /// Saved request this draft belongs to (e.g. a history snapshot of it), so Save updates
     /// that entry instead of creating a new one.
     /// </param>
-    public void LoadRequestDraft(RequestModel request, string statusText, bool isDirty, SavedRequest? linkedSaved = null)
+    /// <param name="collectionId">Collection whose variables and scripts apply to the draft.</param>
+    /// <param name="collectionItem">The request in that collection the draft belongs to, if it still exists.</param>
+    public void LoadRequestDraft(RequestModel request, string statusText, bool isDirty, SavedRequest? linkedSaved = null,
+        Guid? collectionId = null, CollectionItem? collectionItem = null)
     {
         _suppressChangeNotifications = true;
         ActiveSavedRequestId = linkedSaved?.Id;
-        ActiveRequestName = linkedSaved?.Name ?? string.Empty;
+        ActiveCollectionId = collectionId;
+        ActiveCollectionItemId = collectionItem?.Id;
+        ActiveRequestName = linkedSaved?.Name ?? collectionItem?.Name ?? string.Empty;
         SelectedRequestMode = RequestMode.Http;
         PopulateFromRequest(request);
         ClearResponse();
@@ -337,7 +398,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     {
         _suppressChangeNotifications = true;
         ActiveSavedRequestId = null;
+        ActiveCollectionId = null;
+        ActiveCollectionItemId = null;
         ActiveRequestName = string.Empty;
+        PreRequestScript = string.Empty;
+        TestScript = string.Empty;
         SelectedMethod = HttpMethodType.GET;
         RequestUrl = string.Empty;
         RequestHeaders.Clear();
@@ -372,6 +437,71 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         RefreshTitleAndSession();
     }
 
+    public void LoadCollectionItem(CollectionModel collection, CollectionItem item)
+    {
+        _suppressChangeNotifications = true;
+        ActiveSavedRequestId = null;
+        ActiveCollectionId = collection.Id;
+        ActiveCollectionItemId = item.Id;
+        ActiveRequestName = item.Name;
+        SelectedRequestMode = RequestMode.Http;
+        PopulateFromRequest(item.Request ?? new RequestModel());
+        ClearResponse();
+        StatusText = collection.SecretsUnreadable
+            ? $"Loaded \"{item.Name}\" - {RequestSecrets.UnreadableNote}"
+            : $"Loaded \"{item.Name}\"";
+        IsDirty = false;
+        _suppressChangeNotifications = false;
+        RefreshTitleAndSession();
+    }
+
+    /// <summary>The tab's request was just saved into a collection: it now belongs to that item.</summary>
+    public void LinkToCollectionItem(CollectionModel collection, CollectionItem item)
+    {
+        ActiveSavedRequestId = null;
+        ActiveCollectionId = collection.Id;
+        ActiveCollectionItemId = item.Id;
+        ActiveRequestName = item.Name;
+        IsDirty = false;
+        RefreshTitleAndSession();
+    }
+
+    /// <param name="itemIds">The deleted requests, or null when the whole collection is gone.</param>
+    public void ClearCollectionLink(Guid collectionId, IReadOnlySet<Guid>? itemIds)
+    {
+        if (ActiveCollectionId != collectionId)
+            return;
+
+        if (itemIds is null)
+        {
+            ActiveCollectionId = null;
+        }
+        else if (ActiveCollectionItemId is not { } itemId || !itemIds.Contains(itemId))
+        {
+            return;
+        }
+
+        if (ActiveCollectionItemId.HasValue)
+        {
+            ActiveCollectionItemId = null;
+            ActiveRequestName = string.Empty;
+            IsDirty = !IsBlank;
+        }
+        RefreshTitleAndSession();
+    }
+
+    public void RenameCollectionItemLink(Guid itemId, string name)
+    {
+        if (ActiveCollectionItemId != itemId)
+            return;
+
+        ActiveRequestName = name;
+        RefreshTitleAndSession();
+    }
+
+    /// <summary>The linked collection's variables or name changed.</summary>
+    public void RefreshVariableScope() => OnPropertyChanged(nameof(VariableScopeText));
+
     public void ClearSavedRequestLink(Guid savedRequestId)
     {
         if (ActiveSavedRequestId != savedRequestId)
@@ -398,20 +528,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         if (!TryPrepareUrl() || !ValidateTimeout())
             return;
 
-        var requestModel = BuildSendModel();
-        string requestedHeaders;
-        try
-        {
-            requestedHeaders = BuildCorsRequestedHeaders(requestModel);
-        }
-        catch (FormatException ex)
-        {
-            StatusText = $"Error: {ex.Message}";
-            return;
-        }
-
-        await RunRequestAsync(requestModel, recordHistory: true, isPreflight: false,
-            corsMethod: SelectedMethod.ToString(), corsRequestedHeaders: requestedHeaders);
+        await RunRequestAsync(isPreflight: false);
     }
 
     [RelayCommand]
@@ -426,32 +543,133 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         if (!TryPrepareUrl() || !ValidateTimeout())
             return;
 
+        // Preflight is a browser HTTP concept; it always goes through HttpService, never the raw socket.
+        await RunRequestAsync(isPreflight: true);
+    }
+
+    // A request with its variables substituted, ready for a transport.
+    private sealed record PreparedRequest(
+        RequestModel Model, string CorsMethod, string CorsRequestedHeaders, IReadOnlyList<string> Unresolved);
+
+    private sealed record ScriptChain(List<string> PreRequest, List<string> Test);
+
+    /// <exception cref="FormatException">The URL (after substitution) or a header is invalid.</exception>
+    private PreparedRequest PrepareSend(IReadOnlyDictionary<string, string> variables,
+        IReadOnlyList<KeyValuePair<string, string>>? scriptedHeaders)
+    {
+        var (resolved, unresolved) = VariableResolver.ResolveRequest(BuildSendModel(scriptedHeaders), variables);
+        resolved.Url = RequireValidUrl(resolved.Url, unresolved);
+        return new PreparedRequest(resolved, SelectedMethod.ToString(), BuildCorsRequestedHeaders(resolved), unresolved);
+    }
+
+    /// <exception cref="FormatException">The URL (after substitution) or a header is invalid.</exception>
+    private PreparedRequest PreparePreflight(IReadOnlyDictionary<string, string> variables)
+    {
         var method = string.IsNullOrWhiteSpace(CorsRequestMethod)
             ? SelectedMethod.ToString()
             : CorsRequestMethod.Trim();
 
-        var baseModel = BuildRequestModel();
-        string requestedHeaders;
-        try
-        {
-            requestedHeaders = BuildCorsRequestedHeaders(baseModel, method);
-        }
-        catch (FormatException ex)
-        {
-            StatusText = $"Error: {ex.Message}";
-            return;
-        }
-        var requestModel = BuildPreflightModel(baseModel, method, requestedHeaders);
-
-        // Preflight is a browser HTTP concept; always go through HttpService, never the raw socket.
-        await RunRequestAsync(requestModel, recordHistory: false, isPreflight: true,
-            corsMethod: method, corsRequestedHeaders: requestedHeaders, forceHttp: true);
+        var (baseModel, unresolved) = VariableResolver.ResolveRequest(BuildRequestModel(), variables);
+        baseModel.Url = RequireValidUrl(baseModel.Url, unresolved);
+        var requestedHeaders = BuildCorsRequestedHeaders(baseModel, method);
+        return new PreparedRequest(BuildPreflightModel(baseModel, method, requestedHeaders), method, requestedHeaders, unresolved);
     }
 
-    // Sending never touches the saved-request library: the request is recorded in history
-    // and stays a draft (IsDirty) until the user saves it explicitly.
-    private async Task RunRequestAsync(RequestModel requestModel, bool recordHistory, bool isPreflight,
-        string corsMethod, string corsRequestedHeaders, bool forceHttp = false)
+    private static string RequireValidUrl(string url, IReadOnlyList<string> unresolved)
+    {
+        var normalized = NormalizeUrl(url);
+        if (Uri.TryCreate(normalized, UriKind.Absolute, out _))
+            return normalized;
+
+        throw new FormatException(unresolved.Count > 0
+            ? $"Invalid URL - no value for {PlaceholderNames(unresolved)}"
+            : "Invalid URL");
+    }
+
+    private static string PlaceholderNames(IEnumerable<string> names) =>
+        string.Join(", ", names.Select(n => "{{" + n + "}}"));
+
+    private static List<KeyValuePair<string, string>> EnabledHeaders(RequestModel model) =>
+        model.Headers
+            .Where(h => h.IsEnabled && !string.IsNullOrWhiteSpace(h.Key))
+            .Select(h => new KeyValuePair<string, string>(h.Key, h.Value))
+            .ToList();
+
+    // Scripts run outermost first: the collection's, each enclosing folder's, then the request's own.
+    private ScriptChain BuildScriptChain(CollectionModel? collection)
+    {
+        var preRequest = new List<string>();
+        var test = new List<string>();
+        if (collection is not null)
+        {
+            preRequest.Add(collection.PreRequestScript);
+            test.Add(collection.TestScript);
+            if (ActiveCollectionItemId is { } itemId)
+            {
+                foreach (var folder in collection.FindPath(itemId).Where(i => i.IsFolder))
+                {
+                    preRequest.Add(folder.PreRequestScript);
+                    test.Add(folder.TestScript);
+                }
+            }
+        }
+        preRequest.Add(PreRequestScript);
+        test.Add(TestScript);
+
+        preRequest.RemoveAll(string.IsNullOrWhiteSpace);
+        test.RemoveAll(string.IsNullOrWhiteSpace);
+        return new ScriptChain(preRequest, test);
+    }
+
+    // Writes what a script set or unset back to the collection, which owns the variables.
+    private void ApplyVariableChanges(CollectionModel? collection, IReadOnlyDictionary<string, string> before, ScriptResult result)
+    {
+        var after = result.Variables;
+        var changed = after.Where(v => !before.TryGetValue(v.Key, out var old) || old != v.Value).ToList();
+        var removed = before.Keys.Where(k => !after.ContainsKey(k)).ToList();
+        if (changed.Count == 0 && removed.Count == 0)
+            return;
+
+        if (collection is null)
+        {
+            result.Console.Add(new ScriptConsoleLine("warn",
+                "Variables set by the script weren't kept: this request isn't in a collection."));
+            return;
+        }
+
+        foreach (var (key, value) in changed)
+        {
+            var isNew = !collection.Variables.Any(v => v.Key.Trim() == key);
+            collection.SetVariable(key, value);
+            if (isNew && PostmanCollectionConverter.LooksSecret(key))
+                collection.Variables[^1].IsSecret = true;
+        }
+        foreach (var key in removed)
+            collection.Variables.RemoveAll(v => v.Key.Trim() == key);
+
+        _owner.Collections.SaveInBackground(collection);
+    }
+
+    private void ShowScriptOutput(ScriptResult? preRequest, ScriptResult? test)
+    {
+        var results = new[] { preRequest, test }.Where(r => r is not null).Select(r => r!).ToList();
+        var tests = results.SelectMany(r => r.Tests).ToList();
+        var console = results.SelectMany(r => r.Console)
+            .Select(line => line.Level == "log" ? line.Text : $"[{line.Level}] {line.Text}");
+
+        TestResults = new ObservableCollection<ScriptTestResult>(tests);
+        ScriptConsoleText = string.Join(Environment.NewLine, console);
+        ScriptError = preRequest is { Succeeded: false }
+            ? $"Pre-request script: {preRequest.Error}"
+            : test is { Succeeded: false } ? $"Test script: {test.Error}" : string.Empty;
+        TestsTabHeader = tests.Count == 0 ? "Tests" : $"Tests ({tests.Count(t => t.Passed)}/{tests.Count})";
+        HasScriptOutput = tests.Count > 0 || ScriptConsoleText.Length > 0 || ScriptError.Length > 0;
+    }
+
+    // Sending never touches the saved-request library or a collection's requests: the
+    // request is recorded in history and stays a draft (IsDirty) until the user saves it.
+    // (Variables a script sets are the exception: they are written to the collection.)
+    private async Task RunRequestAsync(bool isPreflight)
     {
         // Send and Preflight are separate commands; without this guard they could
         // run concurrently and clobber each other's cancellation token.
@@ -461,19 +679,55 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             return;
         }
 
-        // Snapshot before the await: the plain request (no injected Origin header), so
-        // history entries and their reloads stay clean.
-        var historyModel = recordHistory ? BuildRequestModel() : null;
+        // Snapshot before the first await: the plain request (placeholders as typed, no
+        // injected Origin header), so history entries stay clean and hold no variable values.
+        var historyModel = isPreflight ? null : BuildRequestModel();
+        var requestName = Title;
+        var collection = _owner.Collections.Find(ActiveCollectionId);
+        IReadOnlyDictionary<string, string> variables = collection?.EnabledVariables() ?? new Dictionary<string, string>();
+        var scripts = isPreflight || !_owner.CurrentSettings.RunScripts ? null : BuildScriptChain(collection);
 
         ClearResponse();
         IsLoading = true;
         StatusText = isPreflight ? "Sending preflight..." : "Sending...";
         var cts = new CancellationTokenSource();
         _cts = cts;
+        ScriptResult? preResult = null;
 
         try
         {
-            var response = (!forceHttp && SelectedRequestMode == RequestMode.RawSocket)
+            IReadOnlyList<KeyValuePair<string, string>>? scriptedHeaders = null;
+            if (scripts is { PreRequest.Count: > 0 } && historyModel is not null)
+            {
+                var headersIn = EnabledHeaders(historyModel);
+                var context = new ScriptContext
+                {
+                    EventName = "prerequest",
+                    RequestName = requestName,
+                    Request = new ScriptRequest(historyModel.Method.ToString(), historyModel.Url, headersIn, historyModel.BodyText),
+                    Variables = variables
+                };
+                var chain = scripts.PreRequest;
+                preResult = await Task.Run(() => ScriptRunner.Run(context, chain, cts.Token));
+                ApplyVariableChanges(collection, variables, preResult);
+                ShowScriptOutput(preResult, null);
+                if (!preResult.Succeeded)
+                {
+                    // As in Postman, a failing pre-request script means the request isn't sent.
+                    StatusText = $"Not sent - pre-request script failed: {preResult.Error}";
+                    SelectedResponseTabIndex = TestsTabIndex;
+                    return;
+                }
+
+                variables = preResult.Variables;
+                if (!headersIn.SequenceEqual(preResult.RequestHeaders))
+                    scriptedHeaders = preResult.RequestHeaders;
+            }
+
+            var prepared = isPreflight ? PreparePreflight(variables) : PrepareSend(variables, scriptedHeaders);
+            var requestModel = prepared.Model;
+
+            var response = (!isPreflight && SelectedRequestMode == RequestMode.RawSocket)
                 ? await _rawSocketService.SendAsync(requestModel, cts.Token)
                 : await _httpService.SendAsync(requestModel, cts.Token);
 
@@ -490,14 +744,39 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
             if (CorsEnabled)
             {
-                CorsVerdict = CorsAnalyzer.Analyze(GetEnabledHeaderValue(requestModel, "Origin"), corsMethod, corsRequestedHeaders,
-                    CorsIncludeCredentials, isPreflight, response);
+                CorsVerdict = CorsAnalyzer.Analyze(GetEnabledHeaderValue(requestModel, "Origin"), prepared.CorsMethod,
+                    prepared.CorsRequestedHeaders, CorsIncludeCredentials, isPreflight, response);
                 HasCorsVerdict = true;
             }
+
+            ScriptResult? testResult = null;
+            if (scripts is { Test.Count: > 0 })
+            {
+                var context = new ScriptContext
+                {
+                    EventName = "test",
+                    RequestName = requestName,
+                    Request = new ScriptRequest(requestModel.Method.ToString(), requestModel.Url, EnabledHeaders(requestModel), requestModel.BodyText),
+                    Response = new ScriptResponse(response.StatusCode, response.ReasonPhrase, response.Duration.TotalMilliseconds,
+                        response.ResponseSize, response.Headers, response.Body),
+                    Variables = variables
+                };
+                var chain = scripts.Test;
+                testResult = await Task.Run(() => ScriptRunner.Run(context, chain, cts.Token));
+                ApplyVariableChanges(collection, variables, testResult);
+            }
+            if (preResult is not null || testResult is not null)
+                ShowScriptOutput(preResult, testResult);
 
             StatusText = $"{response.StatusCode} {response.ReasonPhrase} - {response.Duration.TotalMilliseconds:F0}ms";
             if (response.IsTruncated)
                 StatusText += $" - body truncated at {ResponseText.MaxBodyBytes / (1024 * 1024)} MB";
+            if (TestResults.Count > 0)
+                StatusText += $" - tests {TestResults.Count(t => t.Passed)}/{TestResults.Count} passed";
+            if (testResult is { Succeeded: false })
+                StatusText += " - test script failed";
+            if (prepared.Unresolved.Count > 0)
+                StatusText += $" - no value for {PlaceholderNames(prepared.Unresolved)}";
 
             if (historyModel != null)
             {
@@ -515,7 +794,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                         RequestSnapshot = snapshot,
                         BodyOmitted = bodyOmitted,
                         SavedRequestId = ActiveSavedRequestId,
-                        SavedRequestName = ActiveSavedRequestId.HasValue ? ActiveRequestName : null
+                        SavedRequestName = ActiveSavedRequestId.HasValue ? ActiveRequestName : null,
+                        CollectionId = ActiveCollectionId,
+                        CollectionItemId = ActiveCollectionItemId
                     });
                 }
                 catch (Exception ex)
@@ -533,16 +814,16 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             StatusText = ex.Message.Contains(cause, StringComparison.OrdinalIgnoreCase)
                 ? $"Error: {ex.Message}"
                 : $"Error: {ex.Message} {cause}";
-            ClearResponse();
+            ClearResponseKeepingScripts(preResult);
         }
         catch (OperationCanceledException)
         {
             StatusText = cts.IsCancellationRequested ? "Request cancelled" : "Request timed out";
-            ClearResponse();
+            ClearResponseKeepingScripts(preResult);
         }
         catch (RawSocketException ex)
         {
-            ClearResponse();
+            ClearResponseKeepingScripts(preResult);
             SetDiagnostics(ex.Diagnostics);
             SelectedResponseTabIndex = ConnectionTabIndex;
             StatusText = $"Error: {ex.Message}";
@@ -550,7 +831,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusText = $"Error: {ex.Message}";
-            ClearResponse();
+            ClearResponseKeepingScripts(preResult);
         }
         finally
         {
@@ -561,6 +842,14 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         }
     }
 
+    // A failed send still shows what the pre-request script logged.
+    private void ClearResponseKeepingScripts(ScriptResult? preResult)
+    {
+        ClearResponse();
+        if (preResult is not null)
+            ShowScriptOutput(preResult, null);
+    }
+
     private bool TryPrepareUrl()
     {
         if (string.IsNullOrWhiteSpace(RequestUrl))
@@ -568,6 +857,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             StatusText = "Please enter a URL";
             return false;
         }
+
+        // With placeholders the URL can only be judged once variables are substituted
+        // (RequireValidUrl), and "{{baseUrl}}/x" must not be rewritten to "https://{{baseUrl}}/x".
+        if (VariableResolver.HasPlaceholders(RequestUrl))
+            return true;
 
         var url = NormalizeUrl(RequestUrl);
         if (!Uri.TryCreate(url, UriKind.Absolute, out _))
@@ -709,10 +1003,16 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         CurlExportResult result;
         try
         {
-            // Exactly what Send would put on the wire, including the CORS Origin header.
-            var model = BuildSendModel();
-            model.Url = NormalizeUrl(model.Url);
-            result = CurlExporter.Generate(model, _owner.CurrentSettings.CurlExportStyle);
+            // Exactly what Send would put on the wire: variables substituted, CORS Origin
+            // header included. (Pre-request scripts aren't run for an export.)
+            var variables = _owner.Collections.Find(ActiveCollectionId)?.EnabledVariables() ?? new Dictionary<string, string>();
+            var prepared = PrepareSend(variables, scriptedHeaders: null);
+            result = CurlExporter.Generate(prepared.Model, _owner.CurrentSettings.CurlExportStyle);
+            if (prepared.Unresolved.Count > 0)
+            {
+                var note = $"no value for {PlaceholderNames(prepared.Unresolved)}";
+                result = result with { Warning = result.Warning is null ? note : $"{result.Warning}; {note}" };
+            }
         }
         catch (Exception ex) when (ex is UriFormatException or FormatException)
         {
@@ -733,6 +1033,10 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     {
         try
         {
+            // A tab opened from a collection saves back into that collection.
+            if (ActiveCollectionItemId.HasValue && await _owner.Collections.SaveTabToItemAsync(this))
+                return;
+
             var requestModel = BuildRequestModel();
 
             if (ActiveSavedRequestId.HasValue)
@@ -779,6 +1083,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
 
             // Only link the tab and list the entry once it's actually on disk.
             await _savedRequestService.SaveAsync(saved);
+            ActiveCollectionItemId = null;
             ActiveSavedRequestId = saved.Id;
             ActiveRequestName = saved.Name;
             _owner.SavedRequests.Insert(0, saved);
@@ -1083,7 +1388,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             CorsOrigin = CorsOrigin,
             CorsRequestMethod = CorsRequestMethod,
             CorsRequestHeaders = CorsRequestHeaders,
-            CorsIncludeCredentials = CorsIncludeCredentials
+            CorsIncludeCredentials = CorsIncludeCredentials,
+            PreRequestScript = PreRequestScript,
+            TestScript = TestScript
         };
     }
 
@@ -1092,9 +1399,12 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     /// injected CORS <c>Origin</c> header when CORS testing is enabled. The injection lives here
     /// (not in <see cref="BuildRequestModel"/>) so saved/exported requests keep a clean Headers list.
     /// </summary>
-    private RequestModel BuildSendModel()
+    /// <param name="scriptedHeaders">The header list a pre-request script left, when it changed it.</param>
+    private RequestModel BuildSendModel(IReadOnlyList<KeyValuePair<string, string>>? scriptedHeaders = null)
     {
         var model = BuildRequestModel();
+        if (scriptedHeaders is not null)
+            model.Headers = scriptedHeaders.Select(h => new HeaderItemData { Key = h.Key, Value = h.Value }).ToList();
 
         if (CorsEnabled && !string.IsNullOrWhiteSpace(CorsOrigin))
             SetHeader(model, "Origin", CorsOrigin.Trim());
@@ -1119,14 +1429,14 @@ public partial class RequestWorkspaceViewModel : ObservableObject
             // the 3xx itself, which the analysis reports as a failed preflight status.
             FollowRedirects = false,
             CorsEnabled = CorsEnabled,
-            CorsOrigin = CorsOrigin,
+            CorsOrigin = baseModel.CorsOrigin,
             CorsRequestMethod = CorsRequestMethod,
-            CorsRequestHeaders = CorsRequestHeaders,
+            CorsRequestHeaders = baseModel.CorsRequestHeaders,
             CorsIncludeCredentials = CorsIncludeCredentials
         };
 
-        var origin = !string.IsNullOrWhiteSpace(CorsOrigin)
-            ? CorsOrigin.Trim()
+        var origin = !string.IsNullOrWhiteSpace(baseModel.CorsOrigin)
+            ? baseModel.CorsOrigin.Trim()
             : GetEnabledHeaderValue(baseModel, "Origin");
         if (!string.IsNullOrWhiteSpace(origin))
             SetHeader(model, "Origin", origin);
@@ -1157,8 +1467,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     /// <exception cref="FormatException">A header or the URL is invalid.</exception>
     private string BuildCorsRequestedHeaders(RequestModel model, string? methodOverride = null)
     {
-        if (!string.IsNullOrWhiteSpace(CorsRequestHeaders))
-            return CorsRequestHeaders.Trim();
+        if (!string.IsNullOrWhiteSpace(model.CorsRequestHeaders))
+            return model.CorsRequestHeaders.Trim();
 
         var composed = RequestComposer.Compose(model, includeClientDefaults: false, methodOverride, ComposeOptions.Describe);
         var headers = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1252,6 +1562,8 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         CorsRequestMethod = request.CorsRequestMethod;
         CorsRequestHeaders = request.CorsRequestHeaders;
         CorsIncludeCredentials = request.CorsIncludeCredentials;
+        PreRequestScript = request.PreRequestScript;
+        TestScript = request.TestScript;
     }
 
     private bool IsRequestTimeoutValid() => RequestTimeoutSeconds is >= 1 and <= 300;
@@ -1267,6 +1579,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         TimingPhases = [];
         CorsVerdict = null;
         HasCorsVerdict = false;
+        TestResults = [];
+        ScriptConsoleText = string.Empty;
+        ScriptError = string.Empty;
+        TestsTabHeader = "Tests";
+        HasScriptOutput = false;
     }
 
     private void SetDiagnostics(ConnectionDiagnostics? diagnostics)

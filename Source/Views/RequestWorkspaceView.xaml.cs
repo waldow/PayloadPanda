@@ -19,7 +19,22 @@ public partial class RequestWorkspaceView : UserControl
 
         ResponsePrettyEditor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("JavaScript");
 
+        var javascript = HighlightingManager.Instance.GetDefinition("JavaScript");
+        TuneForDarkTheme(javascript);
+        PreRequestScriptEditor.SyntaxHighlighting = javascript;
+        TestScriptEditor.SyntaxHighlighting = javascript;
+
         RequestBodyEditor.TextChanged += RequestBodyEditor_TextChanged;
+        PreRequestScriptEditor.TextChanged += (_, _) =>
+        {
+            if (!_syncingEditorText && _viewModel is not null)
+                _viewModel.PreRequestScript = PreRequestScriptEditor.Text;
+        };
+        TestScriptEditor.TextChanged += (_, _) =>
+        {
+            if (!_syncingEditorText && _viewModel is not null)
+                _viewModel.TestScript = TestScriptEditor.Text;
+        };
         DataContextChanged += RequestWorkspaceView_DataContextChanged;
     }
 
@@ -39,6 +54,8 @@ public partial class RequestWorkspaceView : UserControl
         else
         {
             RequestBodyEditor.Text = string.Empty;
+            PreRequestScriptEditor.Text = string.Empty;
+            TestScriptEditor.Text = string.Empty;
             ResponsePrettyEditor.Text = string.Empty;
             ResponseRawEditor.Text = string.Empty;
         }
@@ -66,6 +83,14 @@ public partial class RequestWorkspaceView : UserControl
                 _syncingEditorText = false;
             }
         }
+        else if (e.PropertyName == nameof(RequestWorkspaceViewModel.PreRequestScript))
+        {
+            SetEditorText(PreRequestScriptEditor, _viewModel.PreRequestScript);
+        }
+        else if (e.PropertyName == nameof(RequestWorkspaceViewModel.TestScript))
+        {
+            SetEditorText(TestScriptEditor, _viewModel.TestScript);
+        }
         else if (e.PropertyName == nameof(RequestWorkspaceViewModel.ResponseBody))
         {
             ResponsePrettyEditor.Text = _viewModel.ResponseBody;
@@ -87,10 +112,54 @@ public partial class RequestWorkspaceView : UserControl
 
         _syncingEditorText = true;
         RequestBodyEditor.Text = _viewModel.RequestBody;
+        PreRequestScriptEditor.Text = _viewModel.PreRequestScript;
+        TestScriptEditor.Text = _viewModel.TestScript;
         _syncingEditorText = false;
         ResponsePrettyEditor.Text = _viewModel.ResponseBody;
         ResponseRawEditor.Text = _viewModel.RawResponseBody;
         ApplyBodyHighlighting();
+    }
+
+    // AvalonEdit's JavaScript colours are made for a white background: keywords and numbers
+    // come out dark blue, unreadable on the dark theme. The definition is shared, so this
+    // also applies to the response's Pretty view.
+    private static bool s_javascriptTuned;
+
+    private static void TuneForDarkTheme(IHighlightingDefinition? definition)
+    {
+        if (definition is null || s_javascriptTuned)
+            return;
+        s_javascriptTuned = true;
+
+        (string Name, string Color)[] colors =
+        [
+            ("JavaScriptKeyWords", "#FF7B72"), ("JavaScriptIntrinsics", "#79C0FF"), ("JavaScriptLiterals", "#79C0FF"),
+            ("JavaScriptGlobalFunctions", "#D2A8FF"), ("Digits", "#79C0FF"), ("String", "#A5D6FF"),
+            ("Character", "#A5D6FF"), ("Regex", "#7EE787"), ("Comment", "#8B949E")
+        ];
+        foreach (var (name, color) in colors)
+        {
+            try
+            {
+                if (definition.GetNamedColor(name) is { } named)
+                    named.Foreground = new SimpleHighlightingBrush((Color)ColorConverter.ConvertFromString(color));
+            }
+            catch (InvalidOperationException)
+            {
+                // A frozen colour keeps its default; highlighting still works.
+            }
+        }
+    }
+
+    // Pushes a view-model change into an editor without echoing it back as an edit.
+    private void SetEditorText(ICSharpCode.AvalonEdit.TextEditor editor, string text)
+    {
+        if (editor.Text == text)
+            return;
+
+        _syncingEditorText = true;
+        editor.Text = text;
+        _syncingEditorText = false;
     }
 
     // AvalonEdit ships "Json" and "XML" definitions; plain text gets none.

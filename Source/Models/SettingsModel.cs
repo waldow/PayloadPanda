@@ -11,6 +11,9 @@ public class SettingsModel
     public bool DefaultFollowRedirects { get; set; } = true;
     public bool SslCertificateVerification { get; set; } = true;
 
+    // Pre-request and test scripts (often imported with a collection) run when sending.
+    public bool RunScripts { get; set; } = true;
+
     // Editor
     public int EditorFontSize { get; set; } = 13;
     public bool EditorWordWrap { get; set; } = true;

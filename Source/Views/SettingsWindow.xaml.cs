@@ -27,6 +27,7 @@ public partial class SettingsWindow : Window
         TimeoutBox.Text = _settings.DefaultTimeoutSeconds.ToString();
         FollowRedirectsBox.IsChecked = _settings.DefaultFollowRedirects;
         SslVerificationBox.IsChecked = _settings.SslCertificateVerification;
+        RunScriptsBox.IsChecked = _settings.RunScripts;
         FontSizeBox.Text = _settings.EditorFontSize.ToString();
         WordWrapBox.IsChecked = _settings.EditorWordWrap;
         SelectCurlStyle(_settings.CurlExportStyle);
@@ -95,6 +96,7 @@ public partial class SettingsWindow : Window
         _settings.DefaultTimeoutSeconds = timeout;
         _settings.DefaultFollowRedirects = FollowRedirectsBox.IsChecked == true;
         _settings.SslCertificateVerification = SslVerificationBox.IsChecked == true;
+        _settings.RunScripts = RunScriptsBox.IsChecked == true;
         _settings.EditorFontSize = fontSize;
         _settings.EditorWordWrap = WordWrapBox.IsChecked == true;
         _settings.CurlExportStyle = SelectedCurlStyle();
@@ -151,6 +153,7 @@ public partial class SettingsWindow : Window
         TimeoutBox.Text = defaults.DefaultTimeoutSeconds.ToString();
         FollowRedirectsBox.IsChecked = defaults.DefaultFollowRedirects;
         SslVerificationBox.IsChecked = defaults.SslCertificateVerification;
+        RunScriptsBox.IsChecked = defaults.RunScripts;
         FontSizeBox.Text = defaults.EditorFontSize.ToString();
         WordWrapBox.IsChecked = defaults.EditorWordWrap;
         SelectCurlStyle(defaults.CurlExportStyle);

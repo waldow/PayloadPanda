@@ -13,4 +13,9 @@ public class HistoryItem
     public bool BodyOmitted { get; set; }
     public Guid? SavedRequestId { get; set; }
     public string? SavedRequestName { get; set; }
+
+    // The collection (and the request in it) the entry was sent from, so reloading it
+    // gets the same variables and scripts.
+    public Guid? CollectionId { get; set; }
+    public Guid? CollectionItemId { get; set; }
 }
