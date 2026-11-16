@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using PayloadPanda.Services;
 using PayloadPanda.Services.Scripting;
 
 namespace PayloadPanda.Tests;
@@ -13,7 +14,7 @@ public class ScriptRunnerTests
             [new("Content-Type", "application/json")], "{\"client_id\":\"abc\"}"),
         Response = new ScriptResponse(code, code == 200 ? "OK" : "Bad Request", 41.6, body.Length,
             [new("Content-Type", "application/json"), new("X-Request-Id", "r-1")], body),
-        Variables = variables ?? new Dictionary<string, string> { ["machineToken"] = "", ["crn"] = "42" }
+        Scopes = new VariableScopes { Collection = variables ?? new Dictionary<string, string> { ["machineToken"] = "", ["crn"] = "42" } }
     };
 
     private static ScriptResult Run(string script, ScriptContext? context = null) =>
@@ -31,8 +32,8 @@ public class ScriptRunnerTests
             TestContext("{\"access_token\":\"tok-123\",\"scope\":\"create:locations\"}"));
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal("tok-123", result.Variables["machineToken"]);
-        Assert.Equal("42", result.Variables["crn"]);
+        Assert.Equal("tok-123", result.Scopes.Collection["machineToken"]);
+        Assert.Equal("42", result.Scopes.Collection["crn"]);
         Assert.Equal(new ScriptConsoleLine("log", "scope granted: create:locations"), Assert.Single(result.Console));
     }
 
@@ -113,7 +114,7 @@ public class ScriptRunnerTests
         var result = Run("pm.collectionVariables.set('a', 1);\nconsole.log('before');\nthrow new Error('boom');\nconsole.log('after');");
 
         Assert.Equal("boom (line 3)", result.Error);
-        Assert.Equal("1", result.Variables["a"]);
+        Assert.Equal("1", result.Scopes.Collection["a"]);
         Assert.Equal(["before"], result.Console.Select(c => c.Text));
     }
 
@@ -124,7 +125,7 @@ public class ScriptRunnerTests
         {
             EventName = "prerequest",
             Request = new ScriptRequest("GET", "{{baseUrl}}/items", [new("Accept", "text/plain"), new("X-Old", "1")], string.Empty),
-            Variables = new Dictionary<string, string> { ["crn"] = "42", ["gone"] = "x" }
+            Scopes = new VariableScopes { Collection = new Dictionary<string, string> { ["crn"] = "42", ["gone"] = "x" } }
         };
 
         var result = ScriptRunner.Run(context,
@@ -135,16 +136,14 @@ public class ScriptRunnerTests
             pm.request.headers.remove('x-old');
             pm.collectionVariables.unset('gone');
             pm.collectionVariables.set('stamp', { n: 1 });
-            pm.environment.set('fromEnv', true);
             pm.test('no response yet', () => pm.expect(pm.response).to.be.undefined);
             """
         ]);
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal([new("accept", "application/json"), new("X-Crn", "42")], result.RequestHeaders);
-        Assert.Equal(new Dictionary<string, string> { ["crn"] = "42", ["stamp"] = "{\"n\":1}", ["fromEnv"] = "true" }, result.Variables);
+        Assert.Equal(new Dictionary<string, string> { ["crn"] = "42", ["stamp"] = "{\"n\":1}" }, result.Scopes.Collection);
         Assert.True(Assert.Single(result.Tests).Passed);
-        Assert.Contains(result.Console, c => c.Level == "warn" && c.Text.Contains("pm.environment is mapped"));
     }
 
     [Fact]
@@ -159,7 +158,76 @@ public class ScriptRunnerTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.True(Assert.Single(result.Tests).Passed);
-        Assert.Equal("collection>request", result.Variables["step"]);
+        Assert.Equal("collection>request", result.Scopes.Collection["step"]);
+    }
+
+    private static ScriptContext ScopedContext(string? environmentName = "stg") => new()
+    {
+        EventName = "test",
+        Request = new ScriptRequest("GET", "{{baseUrl}}/x", [], string.Empty),
+        Response = new ScriptResponse(200, "OK", 1, 2, [], "{}"),
+        Scopes = new VariableScopes
+        {
+            Globals = new Dictionary<string, string> { ["baseUrl"] = "https://global.example", ["onlyGlobal"] = "g" },
+            Collection = new Dictionary<string, string> { ["baseUrl"] = "https://collection.example", ["onlyCollection"] = "c" },
+            Environment = new Dictionary<string, string> { ["baseUrl"] = "https://stg.example" },
+            EnvironmentName = environmentName
+        }
+    };
+
+    [Fact]
+    public void Each_scope_is_written_separately_and_local_values_are_not_stored()
+    {
+        var result = ScriptRunner.Run(ScopedContext(),
+        [
+            """
+            pm.environment.set('token', 'env-tok');
+            pm.globals.set('seen', true);
+            pm.collectionVariables.set('step', 1);
+            pm.variables.set('scratch', 'local-only');
+            pm.environment.unset('baseUrl');
+            """
+        ]);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(new Dictionary<string, string> { ["token"] = "env-tok" }, result.Scopes.Environment);
+        Assert.Equal("true", result.Scopes.Globals["seen"]);
+        Assert.Equal("1", result.Scopes.Collection["step"]);
+        Assert.Equal(new Dictionary<string, string> { ["scratch"] = "local-only" }, result.Scopes.Locals);
+        Assert.False(result.Scopes.Collection.ContainsKey("scratch"));
+    }
+
+    [Theory]
+    [InlineData("pm.expect(pm.variables.get('baseUrl')).to.equal('https://stg.example')")]
+    [InlineData("pm.expect(pm.collectionVariables.get('baseUrl')).to.equal('https://collection.example')")]
+    [InlineData("pm.expect(pm.globals.get('baseUrl')).to.equal('https://global.example')")]
+    [InlineData("pm.expect(pm.variables.get('onlyCollection')).to.equal('c'); pm.expect(pm.variables.get('onlyGlobal')).to.equal('g')")]
+    [InlineData("pm.expect(pm.environment.get('onlyGlobal')).to.be.undefined; pm.expect(pm.environment.has('baseUrl')).to.be.true")]
+    [InlineData("pm.variables.set('baseUrl', 'https://local.example'); pm.expect(pm.variables.replaceIn('{{baseUrl}}/a')).to.equal('https://local.example/a')")]
+    [InlineData("pm.expect(pm.environment.name).to.equal('stg')")]
+    [InlineData("pm.expect(pm.variables.toObject()).to.eql({ baseUrl: 'https://stg.example', onlyCollection: 'c', onlyGlobal: 'g' })")]
+    public void Variables_resolve_local_then_environment_then_collection_then_globals(string script)
+    {
+        var result = ScriptRunner.Run(ScopedContext(), [script]);
+
+        Assert.True(result.Succeeded, result.Error);
+    }
+
+    [Fact]
+    public void Local_values_carry_from_one_script_to_the_next()
+    {
+        var result = ScriptRunner.Run(ScopedContext(),
+            ["pm.variables.set('nonce', 'n-1');", "pm.test('carried', () => pm.expect(pm.variables.get('nonce')).to.equal('n-1'));"]);
+
+        Assert.True(Assert.Single(result.Tests).Passed);
+    }
+
+    [Fact]
+    public void Without_an_environment_its_name_is_undefined()
+    {
+        var result = ScriptRunner.Run(ScopedContext(environmentName: null), ["pm.test('none', () => pm.expect(pm.environment.name).to.be.undefined);"]);
+
+        Assert.True(Assert.Single(result.Tests).Passed);
     }
 
     [Fact]
@@ -168,7 +236,7 @@ public class ScriptRunnerTests
         var result = ScriptRunner.Run(TestContext(), ["throw new Error('first');", "pm.collectionVariables.set('ran', 'yes');"]);
 
         Assert.StartsWith("first", result.Error);
-        Assert.False(result.Variables.ContainsKey("ran"));
+        Assert.False(result.Scopes.Collection.ContainsKey("ran"));
     }
 
     [Fact]
@@ -211,6 +279,6 @@ public class ScriptRunnerTests
         var result = Run($"pm.collectionVariables.set('probe', {expression});");
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.Equal("undefined", result.Variables["probe"]);
+        Assert.Equal("undefined", result.Scopes.Collection["probe"]);
     }
 }

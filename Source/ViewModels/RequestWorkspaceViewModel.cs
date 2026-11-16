@@ -307,9 +307,36 @@ public partial class RequestWorkspaceViewModel : ObservableObject
     }
 
     /// <summary>Where {{variables}} on this tab come from, for the Scripts tab.</summary>
-    public string VariableScopeText => _owner.Collections.Find(ActiveCollectionId) is { } collection
-        ? $"Variables and collection scripts come from \"{collection.Name}\"."
-        : "This request isn't in a collection: {{variables}} aren't replaced, and variables a script sets aren't kept.";
+    public string VariableScopeText
+    {
+        get
+        {
+            var sources = new List<string>();
+            if (_owner.Environments.Active is { } environment)
+                sources.Add($"the environment \"{environment.Name}\"");
+            if (_owner.Collections.Find(ActiveCollectionId) is { } collection)
+                sources.Add($"the collection \"{collection.Name}\"");
+            sources.Add("globals");
+            return sources.Count == 1
+                ? "{{variables}} come from globals only. Pick an environment in the title bar, or open a request from a collection, for more."
+                : $"{{{{variables}}}} come from {string.Join(", then ", sources)}. The first that has a value wins.";
+        }
+    }
+
+    // Whoever stores each variable layer, so what a script sets can be written back.
+    private sealed record VariableOwners(CollectionModel? Collection, EnvironmentModel? Environment, EnvironmentModel Globals)
+    {
+        public VariableScopes ToScopes() => new()
+        {
+            Globals = Globals.EnabledVariables(),
+            Collection = Collection?.EnabledVariables() ?? new Dictionary<string, string>(),
+            Environment = Environment?.EnabledVariables() ?? new Dictionary<string, string>(),
+            EnvironmentName = Environment?.Name
+        };
+    }
+
+    private VariableOwners CurrentVariableOwners() =>
+        new(_owner.Collections.Find(ActiveCollectionId), _owner.Environments.Active, _owner.Environments.Globals);
 
     public void ApplyEditorSettings(int fontSize, bool wordWrap)
     {
@@ -621,33 +648,60 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         return new ScriptChain(preRequest, test);
     }
 
-    // Writes what a script set or unset back to the collection, which owns the variables.
-    private void ApplyVariableChanges(CollectionModel? collection, IReadOnlyDictionary<string, string> before, ScriptResult result)
+    // Writes what a script set or unset back to whoever stores that layer. Local values
+    // (pm.variables.set) belong to the send and are never stored.
+    private void ApplyVariableChanges(VariableOwners owners, VariableScopes before, ScriptResult result)
     {
-        var after = result.Variables;
-        var changed = after.Where(v => !before.TryGetValue(v.Key, out var old) || old != v.Value).ToList();
-        var removed = before.Keys.Where(k => !after.ContainsKey(k)).ToList();
-        if (changed.Count == 0 && removed.Count == 0)
-            return;
+        var after = result.Scopes;
 
-        if (collection is null)
+        if (Differs(before.Collection, after.Collection))
         {
-            result.Console.Add(new ScriptConsoleLine("warn",
-                "Variables set by the script weren't kept: this request isn't in a collection."));
-            return;
+            if (owners.Collection is null)
+            {
+                result.Console.Add(new ScriptConsoleLine("warn",
+                    "Collection variables set by the script weren't kept: this request isn't in a collection."));
+            }
+            else
+            {
+                Apply(owners.Collection.Variables, before.Collection, after.Collection);
+                _owner.Collections.SaveInBackground(owners.Collection);
+            }
         }
 
-        foreach (var (key, value) in changed)
+        if (Differs(before.Environment, after.Environment))
         {
-            var isNew = !collection.Variables.Any(v => v.Key.Trim() == key);
-            collection.SetVariable(key, value);
-            if (isNew && PostmanCollectionConverter.LooksSecret(key))
-                collection.Variables[^1].IsSecret = true;
+            if (owners.Environment is null)
+            {
+                result.Console.Add(new ScriptConsoleLine("warn",
+                    "No environment is selected, so values set with pm.environment were kept for this send only."));
+            }
+            else
+            {
+                Apply(owners.Environment.Variables, before.Environment, after.Environment);
+                _owner.Environments.SaveInBackground(owners.Environment);
+            }
         }
-        foreach (var key in removed)
-            collection.Variables.RemoveAll(v => v.Key.Trim() == key);
 
-        _owner.Collections.SaveInBackground(collection);
+        if (Differs(before.Globals, after.Globals))
+        {
+            Apply(owners.Globals.Variables, before.Globals, after.Globals);
+            _owner.Environments.SaveInBackground(owners.Globals);
+        }
+
+        static bool Differs(IReadOnlyDictionary<string, string> old, IReadOnlyDictionary<string, string> current) =>
+            old.Count != current.Count || current.Any(v => !old.TryGetValue(v.Key, out var value) || value != v.Value);
+
+        static void Apply(List<CollectionVariable> stored, IReadOnlyDictionary<string, string> old, IReadOnlyDictionary<string, string> current)
+        {
+            foreach (var (key, value) in current.Where(v => !old.TryGetValue(v.Key, out var previous) || previous != v.Value))
+            {
+                var (variable, added) = stored.SetValue(key, value);
+                if (added && PostmanCollectionConverter.LooksSecret(key))
+                    variable.IsSecret = true;
+            }
+            foreach (var key in old.Keys.Where(k => !current.ContainsKey(k)))
+                stored.RemoveKey(key);
+        }
     }
 
     private void ShowScriptOutput(ScriptResult? preRequest, ScriptResult? test)
@@ -683,9 +737,9 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         // injected Origin header), so history entries stay clean and hold no variable values.
         var historyModel = isPreflight ? null : BuildRequestModel();
         var requestName = Title;
-        var collection = _owner.Collections.Find(ActiveCollectionId);
-        IReadOnlyDictionary<string, string> variables = collection?.EnabledVariables() ?? new Dictionary<string, string>();
-        var scripts = isPreflight || !_owner.CurrentSettings.RunScripts ? null : BuildScriptChain(collection);
+        var owners = CurrentVariableOwners();
+        var scopes = owners.ToScopes();
+        var scripts = isPreflight || !_owner.CurrentSettings.RunScripts ? null : BuildScriptChain(owners.Collection);
 
         ClearResponse();
         IsLoading = true;
@@ -705,11 +759,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                     EventName = "prerequest",
                     RequestName = requestName,
                     Request = new ScriptRequest(historyModel.Method.ToString(), historyModel.Url, headersIn, historyModel.BodyText),
-                    Variables = variables
+                    Scopes = scopes
                 };
                 var chain = scripts.PreRequest;
                 preResult = await Task.Run(() => ScriptRunner.Run(context, chain, cts.Token));
-                ApplyVariableChanges(collection, variables, preResult);
+                ApplyVariableChanges(owners, scopes, preResult);
                 ShowScriptOutput(preResult, null);
                 if (!preResult.Succeeded)
                 {
@@ -719,11 +773,12 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                     return;
                 }
 
-                variables = preResult.Variables;
+                scopes = preResult.Scopes;
                 if (!headersIn.SequenceEqual(preResult.RequestHeaders))
                     scriptedHeaders = preResult.RequestHeaders;
             }
 
+            var variables = scopes.Merged();
             var prepared = isPreflight ? PreparePreflight(variables) : PrepareSend(variables, scriptedHeaders);
             var requestModel = prepared.Model;
 
@@ -759,11 +814,11 @@ public partial class RequestWorkspaceViewModel : ObservableObject
                     Request = new ScriptRequest(requestModel.Method.ToString(), requestModel.Url, EnabledHeaders(requestModel), requestModel.BodyText),
                     Response = new ScriptResponse(response.StatusCode, response.ReasonPhrase, response.Duration.TotalMilliseconds,
                         response.ResponseSize, response.Headers, response.Body),
-                    Variables = variables
+                    Scopes = scopes
                 };
                 var chain = scripts.Test;
                 testResult = await Task.Run(() => ScriptRunner.Run(context, chain, cts.Token));
-                ApplyVariableChanges(collection, variables, testResult);
+                ApplyVariableChanges(owners, scopes, testResult);
             }
             if (preResult is not null || testResult is not null)
                 ShowScriptOutput(preResult, testResult);
@@ -1005,8 +1060,7 @@ public partial class RequestWorkspaceViewModel : ObservableObject
         {
             // Exactly what Send would put on the wire: variables substituted, CORS Origin
             // header included. (Pre-request scripts aren't run for an export.)
-            var variables = _owner.Collections.Find(ActiveCollectionId)?.EnabledVariables() ?? new Dictionary<string, string>();
-            var prepared = PrepareSend(variables, scriptedHeaders: null);
+            var prepared = PrepareSend(CurrentVariableOwners().ToScopes().Merged(), scriptedHeaders: null);
             result = CurlExporter.Generate(prepared.Model, _owner.CurrentSettings.CurlExportStyle);
             if (prepared.Unresolved.Count > 0)
             {

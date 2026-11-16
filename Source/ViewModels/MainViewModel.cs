@@ -27,8 +27,9 @@ public partial class MainViewModel : ObservableObject
     public MainViewModel(HttpService httpService, RawSocketService rawSocketService,
         PersistenceService persistenceService, AiImportService aiImportService,
         SavedRequestService savedRequestService, RequestTabSessionService tabSessionService,
-        CollectionService collectionService)
+        CollectionService collectionService, EnvironmentService environmentService)
     {
+        Environments = new EnvironmentsViewModel(this, environmentService);
         // Before the first tab: a workspace asks its owner for collections.
         Collections = new CollectionsViewModel(this, collectionService);
         _httpService = httpService;
@@ -50,6 +51,8 @@ public partial class MainViewModel : ObservableObject
     public ObservableCollection<RequestWorkspaceViewModel> Tabs { get; } = [];
 
     public CollectionsViewModel Collections { get; }
+
+    public EnvironmentsViewModel Environments { get; }
 
     [ObservableProperty]
     private RequestWorkspaceViewModel? _selectedTab;
@@ -653,6 +656,29 @@ public partial class MainViewModel : ObservableObject
                 tab.RenameSavedRequestLink(id, saved.Name);
             else
                 tab.ClearSavedRequestLink(id);
+        }
+    }
+
+    /// <summary>The active environment is a setting: it survives restarts.</summary>
+    internal void RememberActiveEnvironment(Guid? id)
+    {
+        if (_settings.ActiveEnvironmentId == id)
+            return;
+
+        _settings.ActiveEnvironmentId = id;
+        _ = SaveSettingsQuietlyAsync();
+    }
+
+    private async Task SaveSettingsQuietlyAsync()
+    {
+        try
+        {
+            await _persistenceService.SaveSettingsAsync(_settings);
+        }
+        catch (Exception ex)
+        {
+            // The choice still applies for this session.
+            ErrorLog.Write("Save settings", ex);
         }
     }
 

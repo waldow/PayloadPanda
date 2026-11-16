@@ -12,8 +12,10 @@ internal static class PmPrelude
         (function (global) {
           'use strict';
           var ctx = JSON.parse(global.__ctxJson);
-          var vars = ctx.variables;
-          var out = { tests: [], console: [], variables: vars, requestHeaders: ctx.request.headers };
+          // The variable layers, highest precedence first when read through pm.variables.
+          var S = ctx.scopes;
+          var layers = [S.locals, S.environment, S.collection, S.globals];
+          var out = { tests: [], console: [], scopes: S, requestHeaders: ctx.request.headers };
           var own = function (o, k) { return Object.prototype.hasOwnProperty.call(o, k); };
 
           // ---- console ----
@@ -30,29 +32,45 @@ internal static class PmPrelude
           global.console = { log: logger('log'), info: logger('info'), debug: logger('log'), warn: logger('warn'), error: logger('error') };
 
           // ---- variables ----
+          function lookup(name) {
+            for (var i = 0; i < layers.length; i++) if (own(layers[i], name)) return layers[i][name];
+            return undefined;
+          }
           function replaceIn(text) {
-            return String(text).replace(/\{\{\s*([^{}]+?)\s*\}\}/g, function (all, name) { return own(vars, name) ? vars[name] : all; });
+            return String(text).replace(/\{\{\s*([^{}]+?)\s*\}\}/g, function (all, name) { var v = lookup(name); return v === undefined ? all : v; });
           }
           function toText(v) {
             if (v === undefined || v === null) return '';
             if (typeof v === 'string') return v;
             return typeof v === 'object' ? JSON.stringify(v) : String(v);
           }
-          function scope(alias) {
-            var noted = false;
-            function note() {
-              if (alias && !noted) { noted = true; out.console.push({ level: 'warn', text: alias + ' is mapped to the collection variables in PayloadPanda' }); }
-            }
+          // One stored layer: the collection's variables, the active environment's, or the globals.
+          function scope(vars) {
             return {
-              get: function (k) { note(); return own(vars, k) ? vars[k] : undefined; },
-              set: function (k, v) { note(); vars[String(k)] = toText(v); },
-              unset: function (k) { note(); delete vars[k]; },
-              has: function (k) { note(); return own(vars, k); },
-              clear: function () { note(); Object.keys(vars).forEach(function (k) { delete vars[k]; }); },
-              toObject: function () { note(); return JSON.parse(JSON.stringify(vars)); },
+              get: function (k) { return own(vars, k) ? vars[k] : undefined; },
+              set: function (k, v) { vars[String(k)] = toText(v); },
+              unset: function (k) { delete vars[k]; },
+              has: function (k) { return own(vars, k); },
+              clear: function () { Object.keys(vars).forEach(function (k) { delete vars[k]; }); },
+              toObject: function () { return JSON.parse(JSON.stringify(vars)); },
               replaceIn: replaceIn
             };
           }
+          // pm.variables reads through every layer; what it sets is local to this send.
+          var resolved = {
+            get: lookup,
+            has: function (k) { return lookup(k) !== undefined; },
+            set: function (k, v) { S.locals[String(k)] = toText(v); },
+            unset: function (k) { delete S.locals[k]; },
+            toObject: function () {
+              var all = {};
+              for (var i = layers.length - 1; i >= 0; i--) Object.keys(layers[i]).forEach(function (k) { all[k] = layers[i][k]; });
+              return all;
+            },
+            replaceIn: replaceIn
+          };
+          var environment = scope(S.environment);
+          environment.name = ctx.environmentName === null ? undefined : ctx.environmentName;
 
           // ---- headers ----
           function headerList(list, writable) {
@@ -148,10 +166,10 @@ internal static class PmPrelude
           var unsupported = function (what) { return function () { throw new Error(what + ' is not supported in PayloadPanda'); }; };
           var pm = {
             info: ctx.info,
-            variables: scope(null),
-            collectionVariables: scope(null),
-            environment: scope('pm.environment'),
-            globals: scope('pm.globals'),
+            variables: resolved,
+            collectionVariables: scope(S.collection),
+            environment: environment,
+            globals: scope(S.globals),
             expect: function (value, message) { return new Assertion(value, message); },
             test: function (name, fn) {
               try { fn(); out.tests.push({ name: String(name), passed: true }); }

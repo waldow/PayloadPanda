@@ -16,7 +16,8 @@ public partial class App : Application
     public static SavedRequestService SavedRequestService { get; } = new();
     public static RequestTabSessionService RequestTabSessionService { get; } = new();
     public static CollectionService CollectionService { get; } = new();
-    public static MainViewModel MainViewModel { get; } = new(HttpService, RawSocketService, PersistenceService, AiImportService, SavedRequestService, RequestTabSessionService, CollectionService);
+    public static EnvironmentService EnvironmentService { get; } = new();
+    public static MainViewModel MainViewModel { get; } = new(HttpService, RawSocketService, PersistenceService, AiImportService, SavedRequestService, RequestTabSessionService, CollectionService, EnvironmentService);
 
     private SingleInstance? _singleInstance;
 
@@ -60,6 +61,8 @@ public partial class App : Application
         var failures = new List<string>();
         await TryLoadAsync("settings", MainViewModel.LoadSettingsFromDiskAsync, failures);
         await MainViewModel.RestoreTabsFromDiskAsync();
+        // Small and needed by any send, so before the history and the libraries.
+        await TryLoadAsync("environments", MainViewModel.Environments.LoadFromDiskAsync, failures);
         await TryLoadAsync("history", MainViewModel.LoadHistoryFromDiskAsync, failures);
         if (await TryLoadAsync("saved requests", MainViewModel.LoadSavedRequestsFromDiskAsync, failures))
             MainViewModel.RelinkTabsToSavedRequests(); // only against a complete library
