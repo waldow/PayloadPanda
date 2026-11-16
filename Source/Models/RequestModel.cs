@@ -41,6 +41,11 @@ public class RequestModel
     public string CorsRequestHeaders { get; set; } = string.Empty;  // Access-Control-Request-Headers (preflight)
     public bool CorsIncludeCredentials { get; set; } = false;
 
+    // JavaScript run before the request is sent and after the response arrives (a subset
+    // of Postman's pm API; see ScriptRunner).
+    public string PreRequestScript { get; set; } = string.Empty;
+    public string TestScript { get; set; } = string.Empty;
+
     // Explicit nulls in hand-edited or AI-generated JSON ({"headers": null})
     // overwrite the non-null defaults during deserialization; call after every
     // load from disk to restore the invariants the rest of the app relies on.
@@ -63,6 +68,8 @@ public class RequestModel
         CorsOrigin ??= string.Empty;
         CorsRequestMethod ??= string.Empty;
         CorsRequestHeaders ??= string.Empty;
+        PreRequestScript ??= string.Empty;
+        TestScript ??= string.Empty;
 
         // A number the enum doesn't define (hand-edited file, newer version) falls back
         // to the default instead of flowing through as an unknown mode.
